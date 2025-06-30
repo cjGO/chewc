@@ -1,0 +1,9 @@
+project:
+  output-dir: _docs
+
+website:
+  title: "chewc"
+  site-url: "https://cjGO.github.io/chewc"
+  description: "JAX breeding sim"
+  repo-branch: main
+  repo-url: "https://github.com/cjGO/chewc"
