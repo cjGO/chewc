@@ -5,4 +5,4 @@ d = { 'settings': { 'branch': 'main',
                 'doc_host': 'https://cjGO.github.io',
                 'git_url': 'https://github.com/cjGO/chewc',
                 'lib_path': 'chewc'},
-  'syms': {'chewc.core': {'chewc.core.foo': ('core.html#foo', 'chewc/core.py')}}}
+  'syms': {'chewc.core': {'chewc.core.quickHaplo': ('genome_simulation.html#quickhaplo', 'chewc/core.py')}}}
