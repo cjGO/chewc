@@ -1,0 +1,72 @@
+[
+  {
+    "objectID": "core.html",
+    "href": "core.html",
+    "title": "core",
+    "section": "",
+    "text": "foo\n\n foo ()",
+    "crumbs": [
+      "core"
+    ]
+  },
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "chewc",
+    "section": "",
+    "text": "This file will become your README and also the index of your documentation.",
+    "crumbs": [
+      "chewc"
+    ]
+  },
+  {
+    "objectID": "index.html#developer-guide",
+    "href": "index.html#developer-guide",
+    "title": "chewc",
+    "section": "Developer Guide",
+    "text": "Developer Guide\nIf you are new to using nbdev here are some useful pointers to get you started.\n\nInstall chewc in Development mode\n# make sure chewc package is installed in development mode\n$ pip install -e .\n\n# make changes under nbs/ directory\n# ...\n\n# compile to have changes apply to chewc\n$ nbdev_prepare",
+    "crumbs": [
+      "chewc"
+    ]
+  },
+  {
+    "objectID": "index.html#usage",
+    "href": "index.html#usage",
+    "title": "chewc",
+    "section": "Usage",
+    "text": "Usage\n\nInstallation\nInstall latest from the GitHub repository:\n$ pip install git+https://github.com/cjGO/chewc.git\nor from conda\n$ conda install -c cjGO chewc\nor from pypi\n$ pip install chewc\n\n\nDocumentation\nDocumentation can be found hosted on this GitHub repository’s pages. Additionally you can find package manager specific guidelines on conda and pypi respectively.",
+    "crumbs": [
+      "chewc"
+    ]
+  },
+  {
+    "objectID": "index.html#how-to-use",
+    "href": "index.html#how-to-use",
+    "title": "chewc",
+    "section": "How to use",
+    "text": "How to use\nFill me in please! Don’t forget code examples:\n\n1+1\n\n2",
+    "crumbs": [
+      "chewc"
+    ]
+  },
+  {
+    "objectID": "population.html",
+    "href": "population.html",
+    "title": "Population",
+    "section": "",
+    "text": "quick_haplo\n\n quick_haplo (key:&lt;function PRNGKey&gt;, n_ind:int, n_chr:int, seg_sites:int,\n              ploidy:int=2, gen_len:int=1, inbred:bool=False)\n\n*Creates a new population with randomly generated haplotypes, analogous to AlphaSimR’s quickHaplo function.\nArgs: key: A JAX random key. Must be provided by the user to ensure reproducibility. n_ind: Number of individuals. n_chr: Number of chromosomes. seg_sites: Number of segregating sites (loci) per chromosome. ploidy: Ploidy level of the individuals. gen_len: The genetic length of the chromosomes in Morgans. inbred: If True, individuals will be fully inbred (homozygous at all loci).\nReturns: A new Population object with random founder individuals.*\n\n\n\nPopulation\n\n Population (geno:jax.Array, genMap:jax.Array, centromere:jax.Array,\n             ploidy:int, id:jax.Array, iid:jax.Array, mother:jax.Array,\n             father:jax.Array, sex:jax.Array, gv:jax.Array,\n             pheno:jax.Array, fixEff:jax.Array,\n             ebv:Optional[jax.Array]=None, gxe:Optional[jax.Array]=None,\n             misc:Dict=&lt;factory&gt;, miscPop:Dict=&lt;factory&gt;)\n\n*A container for all data related to a population of individuals, designed for JAX-based genetic simulations.\nThis structure is immutable. All operations that modify a population should return a new Population object.\nAttributes: geno (jnp.ndarray): A 4D array representing the genotypes of the population. Shape: (nInd, nChr, ploidy, nLoci). dtype: jnp.uint8. genMap (jnp.ndarray): A 2D array holding the genetic map positions for each locus on each chromosome. Positions are in Morgans. Padded with jnp.nan. Shape: (nChr, nLoci). centromere (jnp.ndarray): A 1D array with the centromere position (in Morgans) for each chromosome. Shape: (nChr,). ploidy (int): The ploidy level of the individuals (e.g., 2 for diploid).\nid (jnp.ndarray): The primary, user-facing identifier for each individual.\n    These IDs may not be contiguous or sorted. Shape: `(nInd,)`.\niid (jnp.ndarray): The internal, zero-indexed, contiguous identifier.\n    Crucial for robust indexing in JAX operations. Shape: `(nInd,)`.\nmother (jnp.ndarray): Array of internal IDs (`iid`) for the mother of each\n    individual. A value of -1 indicates no known mother. Shape: `(nInd,)`.\nfather (jnp.ndarray): Array of internal IDs (`iid`) for the father of each\n    individual. A value of -1 indicates no known father. Shape: `(nInd,)`.\nsex (jnp.ndarray): The sex of each individual, represented numerically\n    (e.g., 0 for male, 1 for female). dtype: `jnp.int8`. Shape: `(nInd,)`.\n\ngv (jnp.ndarray): The genetic values (true breeding values) for each\n    individual across one or more traits. Shape: `(nInd, nTraits)`.\npheno (jnp.ndarray): The phenotypic values for each individual.\n    Shape: `(nInd, nTraits)`.\nfixEff (jnp.ndarray): The value of a fixed effect for each individual,\n    often used as an intercept in genomic selection models. Shape: `(nInd,)`.\nebv (Optional[jnp.ndarray]): The estimated breeding values for each\n    individual. Shape: `(nInd, nTraits)`.\ngxe (Optional[jnp.ndarray]): Genotype-by-environment interaction effects.\n    Shape depends on the specific GxE model.\n\nmisc (Dict): A dictionary for storing miscellaneous, non-JAX-critical\n    metadata about individuals.\nmiscPop (Dict): A dictionary for storing miscellaneous, non-JAX-critical\n    metadata about the entire population.*\n\n\nFuture Work: MultiPop Functionality for Parallel Simulations\nFor the library to efficiently handle simulations involving multiple distinct populations at once (e.g., comparing different breeding programs), functionality equivalent to the original AlphaSimR’s MultiPop class should be implemented.\nThe goal is to run computations like meiosis, crossing, and phenotyping across multiple populations in a single, parallelized step that takes full advantage of JAX’s vmap and pmap capabilities.\n\nRecommended Implementation: The “Stack and Index” Method\nDirectly mapping over a Python list of Population objects is not feasible if they contain different numbers of individuals, as JAX’s transformations require consistent array shapes.\nThe recommended approach is to write a utility function that temporarily merges multiple Population objects into a single, larger object for computation.\n\nAdd a Population Index: First, the Population dataclass should be amended to include a population identifier.\n@dataclass\nclass Population:\n    # ... all other fields ...\n    id: np.ndarray\n    pop_id: np.ndarray # New field to track origin population\nCreate a merge_pops Utility: This function will take a list of Population objects and concatenate their internal arrays. It will also generate the pop_id array to track the origin of each individual.\nfrom typing import List\n\ndef merge_pops(pops: List[Population]) -&gt; Population:\n    \"\"\"\n    Combines a list of Population objects into a single, large object \n    suitable for parallel processing with JAX.\n    \"\"\"\n    if not pops:\n        raise ValueError(\"Cannot merge an empty list of populations.\")\n\n    # Concatenate all JAX arrays (GPU data)\n    all_geno = jnp.concatenate([p.geno for p in pops], axis=0)\n    all_gv = jnp.concatenate([p.gv for p in pops], axis=0)\n    # ... and so on for pheno, etc. ...\n\n    # Concatenate all NumPy arrays (CPU data)\n    all_id = np.concatenate([p.id for p in pops], axis=0)\n\n    # Create the population tracking index\n    pop_ids = np.concatenate([\n        np.full(p.nInd, i, dtype=np.int32) for i, p in enumerate(pops)\n    ])\n\n    # Create and return the new unified Population object\n    return Population(\n        geno=all_geno,\n        gv=all_gv,\n        id=all_id,\n        pop_id=pop_ids,\n        # Static data (like genMap, ploidy) can be taken from the first pop,\n        # assuming it's consistent across all populations being merged.\n        genMap=pops[0].genMap,\n        ploidy=pops[0].ploidy\n        # ... fill other fields ...\n    )\n\nThis “stack and index” approach creates a single, unified data structure with consistent array shapes. This is the ideal input for pmap and vmap, allowing for maximum computational throughput on the accelerator. The pop_id field ensures that results can be correctly partitioned and assigned back to their original populations after the computation is complete.",
+    "crumbs": [
+      "Population"
+    ]
+  },
+  {
+    "objectID": "genome_simulation copy.html",
+    "href": "genome_simulation copy.html",
+    "title": "genome_simulation",
+    "section": "",
+    "text": "source\n\nquickHaplo\n\n quickHaplo ()",
+    "crumbs": [
+      "genome_simulation"
+    ]
+  }
+]
