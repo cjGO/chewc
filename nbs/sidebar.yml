@@ -3,3 +3,5 @@ website:
     contents:
       - index.ipynb
       - 00_core.ipynb
+      - 01_population.ipynb
+      - 02_genome_simulation copy.ipynb
