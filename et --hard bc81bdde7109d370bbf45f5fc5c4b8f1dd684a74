@@ -1,0 +1,65 @@
+[33mcommit 908cb972a1ddb9ea55cd98277d980dff2e5ea225[m[33m ([m[1;36mHEAD -> [m[1;32mmain[m[33m)[m
+Author: cjgo <cltngwn@gmail.com>
+Date:   Mon Jul 7 13:15:48 2025 +0800
+
+    FIX: Force commit of clean notebook
+
+[33mcommit bc81bdde7109d370bbf45f5fc5c4b8f1dd684a74[m[33m ([m[1;31morigin/main[m[33m)[m
+Author: cjgo <cltngwn@gmail.com>
+Date:   Mon Jul 7 11:45:14 2025 +0800
+
+    refactor pop add simparam
+
+[33mcommit eb94e56290141a2878e95dd14d152cced37333ac[m
+Author: cjgo <cltngwn@gmail.com>
+Date:   Sun Jul 6 22:28:07 2025 +0800
+
+    pop tbv and tests
+
+[33mcommit 2cfb32593ba3d8cb722574d684167a0842eb91c7[m
+Author: cjgo <cltngwn@gmail.com>
+Date:   Sat Jul 5 20:14:23 2025 +0800
+
+    jax proof population
+
+[33mcommit 0e92df37636b42d14c253ee37c535d687d1f755d[m
+Author: cjgo <cltngwn@gmail.com>
+Date:   Sat Jul 5 19:56:34 2025 +0800
+
+    flax data structure
+
+[33mcommit 0af3c02004eff98ca59fa35f99bcd2901e525fae[m
+Author: cjgo <cltngwn@gmail.com>
+Date:   Sat Jul 5 19:55:22 2025 +0800
+
+    pop constructor validators
+
+[33mcommit 749b0f39de3967439c6c56b05582c3ce155f3cb4[m
+Author: cjgo <cltngwn@gmail.com>
+Date:   Thu Jul 3 21:03:37 2025 +0800
+
+    pop struct
+
+[33mcommit 371b92e41d6f2ded92b34fd3926bc80742a704ef[m
+Author: cjgo <cltngwn@gmail.com>
+Date:   Mon Jun 30 18:06:01 2025 +0800
+
+    init population module
+
+[33mcommit b27cdf4217deedd389f1b60de1024919dd747fcc[m
+Author: CJgo <cltngwn@gmail.com>
+Date:   Mon Jun 30 17:53:22 2025 +0800
+
+    Update LICENSE
+
+[33mcommit 6f3b84d4951fa10a357d28d5f2b3ee01430d4be6[m
+Author: cjgo <cltngwn@gmail.com>
+Date:   Mon Jun 30 17:48:04 2025 +0800
+
+    genome simulation module init
+
+[33mcommit 79d07f2788e73f455dd6bb4296b4159c17556f19[m
+Author: cjgo <cltngwn@gmail.com>
+Date:   Mon Jun 30 17:21:45 2025 +0800
+
+    init commit
