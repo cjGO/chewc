@@ -204,7 +204,7 @@ plt.axis('equal') # Ensure the plot axes are scaled equally
 plt.show()
 ```
 
-    WARNING:2025-07-12 12:47:03,788:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+    WARNING:2025-07-12 17:49:03,319:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
 
 
     --- Initial Simulation Parameters Created ---
@@ -230,12 +230,6 @@ plt.show()
       - Trait2: intercept=17.4828, n_qtl=300
     -----------------------------------
 
-``` python
-```
+![](index_files/figure-commonmark/cell-2-output-3.png)
 
-![](index_files/figure-commonmark/cell-3-output-1.png)
-
-``` python
-```
-
-![](index_files/figure-commonmark/cell-4-output-1.png)
+![](index_files/figure-commonmark/cell-2-output-4.png)
