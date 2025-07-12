@@ -4,4 +4,7 @@ website:
       - index.ipynb
       - 00_core.ipynb
       - 01_population.ipynb
-      - 02_genome_simulation copy.ipynb
+      - 02_simParam.ipynb
+      - 03_trait.ipynb
+      - 04_meiosis.ipynb
+      - 05_cross.ipynb

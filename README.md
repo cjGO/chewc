@@ -52,72 +52,190 @@ import jax.numpy as jnp
 # Assuming your classes are in these files as discussed
 from chewc.sp import SimParam
 from chewc.pop import quick_haplo, Population
+from chewc.trait import add_trait_a # Import the new function
 
 # --- 1. JAX Setup ---
-# JAX requires an explicit random key for all random operations.
-# This is fundamental for reproducibility.
 key = jax.random.PRNGKey(42)
 
 # --- 2. Define the Genome's "Blueprint" ---
-# Let's define a simple genome with 3 chromosomes and 100 loci each.
 n_chr = 3
 n_loci_per_chr = 100
-ploidy = 2 # Diploid individuals
-
-# Create a genetic map with evenly spaced loci for simplicity
-# Shape: (nChr, nLoci)
+ploidy = 2 
 gen_map = jnp.array([jnp.linspace(0, 1, n_loci_per_chr) for _ in range(n_chr)])
-
-# Define the centromere positions for each chromosome
-# e.g. 0.5 for each chromosome
 centromeres = jnp.full(n_chr, 0.5)
 
-# --- 3. Instantiate the Global Simulation Parameters ---
-# The SimParam object holds the immutable "laws" of our simulation.
+# --- 3. Instantiate Initial Simulation Parameters ---
+# Create the initial SimParam object. It does NOT contain a founder population yet.
 SP = SimParam(
     gen_map=gen_map,
     centromere=centromeres,
     ploidy=ploidy
 )
 
-print("--- Simulation Parameters Initialized ---")
+print("\n--- Initial Simulation Parameters Created ---")
 print(SP)
-print(f"Genetic map shape: {SP.gen_map.shape}")
 print("-" * 35)
 
-
 # --- 4. Create the Founder Population ---
-# Split the key for the population generation step to maintain reproducibility
+# Create the founder population using the initial SimParam object.
 key, pop_key = jax.random.split(key)
-n_founders = 50 # Number of individuals in the initial population
+n_founders = 50 
 
-# Use the quick_haplo factory to generate a new population
-# It uses the blueprint from the `SP` object.
 founder_pop = quick_haplo(
     key=pop_key,
-    sim_param=SP,
+    sim_param=SP, # Use the initial SP
     n_ind=n_founders,
-    inbred=False # Create outbred founders
+    inbred=False
 )
 
 print("\n--- Founder Population Created ---")
 print(founder_pop)
-print(f"Genotype array shape: {founder_pop.geno.shape} (nInd, nChr, ploidy, nLoci)")
-print(f"Founder IDs: {founder_pop.id}")
+print(f"Genotype array shape: {founder_pop.geno.shape}")
 print("-" * 35)
+
+
+# --- 5. Finalize Simulation Parameters ---
+# Now, create the *final* version of the SimParam object by adding the founder population.
+# The .replace() method returns a new, updated, immutable object.
+SP = SP.replace(founderPop=founder_pop)
+
+print("\n--- Simulation Parameters Finalized with Founder Pop ---")
+print(SP)
+# Note: The __repr__ for SimParam doesn't show the founderPop, but it is there.
+print(f"Number of traits before: {SP.n_traits}")
+print("-" * 35)
+
+
+# --- 6. Add Two Correlated Additive Traits ---
+key, trait_key = jax.random.split(key)
+
+# Define the parameters for the two new traits
+n_qtl_per_chr = 100
+trait_means = jnp.array([10.0, 20.0])
+trait_vars = jnp.array([1.5, 2.5])
+trait_cor = jnp.array([[1.0, 0.8],
+                       [0.8, 1.0]])
+
+# Call the add_trait_a function. It now works because SP.founderPop exists.
+SP_with_traits = add_trait_a(
+    key=trait_key,
+    sim_param=SP,
+    n_qtl_per_chr=n_qtl_per_chr,
+    mean=trait_means,
+    var=trait_vars,
+    cor_a=trait_cor
+)
+
+print("\n--- Correlated Additive Traits Added ---")
+print(f"SimParam object updated: {SP_with_traits}")
+print(f"Number of traits after: {SP_with_traits.n_traits}")
+print("\nDetails of the new traits:")
+for trait in SP_with_traits.traits:
+    print(f"  - {trait.name}: intercept={trait.intercept:.4f}, n_qtl={trait.n_loci}")
+print("-" * 35)
+
+
+import matplotlib.pyplot as plt
+
+# --- 6. Visualize the Trait Effects ---
+
+# Extract the additive effects for each trait from the final SimParam object
+trait1_effects = SP_with_traits.traits[0].add_eff
+trait2_effects = SP_with_traits.traits[1].add_eff
+
+# Create the plot
+plt.figure(figsize=(10, 6))
+
+# Plot the histogram for Trait 1
+plt.hist(trait1_effects, bins=30, alpha=0.7, label='Trait 1 Effects', color='blue')
+
+# Plot the histogram for Trait 2 on the same axes
+plt.hist(trait2_effects, bins=30, alpha=0.7, label='Trait 2 Effects', color='red')
+
+# Add titles and labels for clarity
+plt.title('Distribution of Additive QTL Effects for Two Correlated Traits')
+plt.xlabel('Additive Effect Size')
+plt.ylabel('Frequency (Number of QTLs)')
+plt.legend()
+plt.grid(True, linestyle='--', alpha=0.6)
+
+# Show the plot
+plt.show()
+
+
+import matplotlib.pyplot as plt
+import jax.numpy as jnp
+
+# --- 7. Create a Scatterplot to Visualize Correlation ---
+
+# Extract the additive effects for each trait, assuming they are the first two traits
+trait1_effects = SP_with_traits.traits[0].add_eff
+trait2_effects = SP_with_traits.traits[1].add_eff
+
+# --- Create the Plot ---
+plt.figure(figsize=(8, 8))
+
+# Create the scatterplot
+plt.scatter(trait1_effects, trait2_effects, alpha=0.6, label='QTL Effects')
+
+# --- Add a Regression Line ---
+# This line helps visualize the strength and direction of the correlation
+m, b = jnp.polyfit(trait1_effects, trait2_effects, 1)
+plt.plot(trait1_effects, m * trait1_effects + b, color='red', linewidth=2, label='Regression Line')
+
+# --- Calculate and Display the Correlation Coefficient ---
+# This provides a quantitative measure of the correlation.
+correlation = jnp.corrcoef(trait1_effects, trait2_effects)[0, 1]
+plt.text(plt.xlim()[0] + 0.05, plt.ylim()[1] - 0.1, f'Correlation: {correlation:.4f}',
+         fontsize=12, bbox=dict(facecolor='white', alpha=0.5))
+
+
+# --- Add Titles and Labels ---
+plt.title('Correlation of Additive Effects Between Trait 1 and Trait 2')
+plt.xlabel('Trait 1 Additive Effect')
+plt.ylabel('Trait 2 Additive Effect')
+plt.axhline(0, color='grey', lw=0.5, linestyle='--')
+plt.axvline(0, color='grey', lw=0.5, linestyle='--')
+plt.legend()
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.axis('equal') # Ensure the plot axes are scaled equally
+
+# Show the plot
+plt.show()
 ```
 
-    WARNING:2025-07-12 12:04:22,313:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+    WARNING:2025-07-12 12:47:03,788:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
 
-    --- Simulation Parameters Initialized ---
+
+    --- Initial Simulation Parameters Created ---
     SimParam(nChr=3, nTraits=0, ploidy=2, sexes='no')
-    Genetic map shape: (3, 100)
     -----------------------------------
 
     --- Founder Population Created ---
     Population(nInd=50, nTraits=0, has_ebv=No)
-    Genotype array shape: (50, 3, 2, 100) (nInd, nChr, ploidy, nLoci)
-    Founder IDs: [ 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
-     24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47
-     48 49]
+    Genotype array shape: (50, 3, 2, 100)
     -----------------------------------
+
+    --- Simulation Parameters Finalized with Founder Pop ---
+    SimParam(nChr=3, nTraits=0, ploidy=2, sexes='no')
+    Number of traits before: 0
+    -----------------------------------
+
+    --- Correlated Additive Traits Added ---
+    SimParam object updated: SimParam(nChr=3, nTraits=2, ploidy=2, sexes='no')
+    Number of traits after: 2
+
+    Details of the new traits:
+      - Trait1: intercept=9.3655, n_qtl=300
+      - Trait2: intercept=17.4828, n_qtl=300
+    -----------------------------------
+
+``` python
+```
+
+![](index_files/figure-commonmark/cell-3-output-1.png)
+
+``` python
+```
+
+![](index_files/figure-commonmark/cell-4-output-1.png)
