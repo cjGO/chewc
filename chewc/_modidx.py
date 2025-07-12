@@ -21,4 +21,9 @@ d = { 'settings': { 'branch': 'main',
                           'chewc.sp.SimParam.n_chr': ('simparam.html#simparam.n_chr', 'chewc/sp.py'),
                           'chewc.sp.SimParam.n_loci_per_chr': ('simparam.html#simparam.n_loci_per_chr', 'chewc/sp.py'),
                           'chewc.sp.SimParam.n_traits': ('simparam.html#simparam.n_traits', 'chewc/sp.py'),
-                          'chewc.sp.TraitA': ('simparam.html#traita', 'chewc/sp.py')}}}
+                          'chewc.sp.TraitA': ('simparam.html#traita', 'chewc/sp.py')},
+            'chewc.trait': { 'chewc.trait.LociMap': ('trait.html#locimap', 'chewc/trait.py'),
+                             'chewc.trait.LociMap.n_loci': ('trait.html#locimap.n_loci', 'chewc/trait.py'),
+                             'chewc.trait.TraitA': ('trait.html#traita', 'chewc/trait.py'),
+                             'chewc.trait._calculate_genetic_params': ('trait.html#_calculate_genetic_params', 'chewc/trait.py'),
+                             'chewc.trait.add_trait_a': ('trait.html#add_trait_a', 'chewc/trait.py')}}}

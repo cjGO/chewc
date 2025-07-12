@@ -35,33 +35,89 @@ Install latest from the GitHub
 $ pip install git+https://github.com/cjGO/chewc.git
 ```
 
-or from [conda](https://anaconda.org/cjGO/chewc)
-
-``` sh
-$ conda install -c cjGO chewc
-```
-
-or from [pypi](https://pypi.org/project/chewc/)
-
-``` sh
-$ pip install chewc
-```
-
 ### Documentation
 
 Documentation can be found hosted on this GitHub
 [repository](https://github.com/cjGO/chewc)’s
-[pages](https://cjGO.github.io/chewc/). Additionally you can find
-package manager specific guidelines on
-[conda](https://anaconda.org/cjGO/chewc) and
-[pypi](https://pypi.org/project/chewc/) respectively.
+[pages](https://cjGO.github.io/chewc/).
 
 ## How to use
 
 Fill me in please! Don’t forget code examples:
 
 ``` python
-1+1
+import jax
+import jax.numpy as jnp
+
+# Assuming your classes are in these files as discussed
+from chewc.sp import SimParam
+from chewc.pop import quick_haplo, Population
+
+# --- 1. JAX Setup ---
+# JAX requires an explicit random key for all random operations.
+# This is fundamental for reproducibility.
+key = jax.random.PRNGKey(42)
+
+# --- 2. Define the Genome's "Blueprint" ---
+# Let's define a simple genome with 3 chromosomes and 100 loci each.
+n_chr = 3
+n_loci_per_chr = 100
+ploidy = 2 # Diploid individuals
+
+# Create a genetic map with evenly spaced loci for simplicity
+# Shape: (nChr, nLoci)
+gen_map = jnp.array([jnp.linspace(0, 1, n_loci_per_chr) for _ in range(n_chr)])
+
+# Define the centromere positions for each chromosome
+# e.g. 0.5 for each chromosome
+centromeres = jnp.full(n_chr, 0.5)
+
+# --- 3. Instantiate the Global Simulation Parameters ---
+# The SimParam object holds the immutable "laws" of our simulation.
+SP = SimParam(
+    gen_map=gen_map,
+    centromere=centromeres,
+    ploidy=ploidy
+)
+
+print("--- Simulation Parameters Initialized ---")
+print(SP)
+print(f"Genetic map shape: {SP.gen_map.shape}")
+print("-" * 35)
+
+
+# --- 4. Create the Founder Population ---
+# Split the key for the population generation step to maintain reproducibility
+key, pop_key = jax.random.split(key)
+n_founders = 50 # Number of individuals in the initial population
+
+# Use the quick_haplo factory to generate a new population
+# It uses the blueprint from the `SP` object.
+founder_pop = quick_haplo(
+    key=pop_key,
+    sim_param=SP,
+    n_ind=n_founders,
+    inbred=False # Create outbred founders
+)
+
+print("\n--- Founder Population Created ---")
+print(founder_pop)
+print(f"Genotype array shape: {founder_pop.geno.shape} (nInd, nChr, ploidy, nLoci)")
+print(f"Founder IDs: {founder_pop.id}")
+print("-" * 35)
 ```
 
-    2
+    WARNING:2025-07-12 12:04:22,313:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+
+    --- Simulation Parameters Initialized ---
+    SimParam(nChr=3, nTraits=0, ploidy=2, sexes='no')
+    Genetic map shape: (3, 100)
+    -----------------------------------
+
+    --- Founder Population Created ---
+    Population(nInd=50, nTraits=0, has_ebv=No)
+    Genotype array shape: (50, 3, 2, 100) (nInd, nChr, ploidy, nLoci)
+    Founder IDs: [ 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
+     24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47
+     48 49]
+    -----------------------------------

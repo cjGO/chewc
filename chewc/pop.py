@@ -215,7 +215,6 @@ def quick_haplo(key: jax.random.PRNGKey, sim_param: 'SimParam', n_ind: int, inbr
 
     return Population(
         geno=geno,
-        # Note: genMap, centromere, and ploidy are no longer part of the Population class
         id=ids,
         iid=ids,  # In a new pop, id and iid are the same
         mother=jnp.full(n_ind, -1, dtype=jnp.int32),

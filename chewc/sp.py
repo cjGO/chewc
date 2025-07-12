@@ -41,21 +41,23 @@ class TraitA(LociMap):
 class SimParam:
     """
     A container for all global simulation parameters.
-    
-    This object is immutable. Functions that modify simulation parameters
-    should return a new SimParam object.
+    ...
     """
     # --- Core Genome Structure ---
-    gen_map: jnp.ndarray          # Genetic map (nChr, nLoci), moved from Population
-    centromere: jnp.ndarray       # Centromere positions (nChr,), moved from Population
-    ploidy: int                   # Ploidy level, moved from Population
+    gen_map: jnp.ndarray
+    centromere: jnp.ndarray
+    ploidy: int
 
     # --- Genetic Architecture ---
-    traits: List[TraitA] = field(default_factory=list) # Using TraitA as a placeholder
+    traits: List[TraitA] = field(default_factory=list)
     snp_chips: List[LociMap] = field(default_factory=list)
+    
+    # --- Population State Reference ---
+    # This is the crucial addition. It's optional to break the circular dependency.
+    founderPop: Optional['Population'] = None
 
-    # --- Simulation Control ---\n",
-    sexes: str = "no"             # "no", "yes_sys", "yes_rand"
+    # --- Simulation Control ---
+    sexes: str = "no"          # "no", "yes_sys", "yes_rand"
     recomb_params: tuple = (2.6, 0.0, 0.0) # v, p, quadProb
     n_threads: int = 1
 
