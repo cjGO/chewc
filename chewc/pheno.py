@@ -36,25 +36,34 @@ def _calculate_gvs_vectorized(
     qtl_alleles = flat_geno_alleles[:, traits.loci_loc, :]
     qtl_geno = jnp.sum(qtl_alleles, axis=2)
 
-    # --- FIX: Separate the vmap definition from the call ---
-
-    # 1. Create the vectorized function first
     vmapped_calculator = jax.vmap(_calculate_single_gv, in_axes=(0, 0, None))
-
-    # 2. Then, call the new function
     gvs = vmapped_calculator(traits.add_eff, traits.intercept, qtl_geno)
-    
-    # ---------------------------------------------------------
-
     return gvs.T
 
+def _calculate_gvs_vectorized_alternative(
+    pop: Population,
+    traits: TraitCollection,
+    ploidy: int
+) -> Float[Array, "nInd nTraits"]:
+    """Calculates all genetic values using a single matrix multiplication."""
+    # Genotype calculation is the same
+    flat_geno_alleles = pop.geno.transpose((0, 1, 3, 2)).reshape(pop.nInd, -1, ploidy)
+    qtl_alleles = flat_geno_alleles[:, traits.loci_loc, :]
+    qtl_geno = jnp.sum(qtl_alleles, axis=2) # Shape: (nInd, nLoci)
 
-# # NOTE the jit decorator caused a 'missing fun' error, but using the partial function..abs
+    # --- The Alternative ---
+    # A single, highly optimized kernel call
+    # (nInd, nLoci) @ (nLoci, nTraits) -> (nInd, nTraits)
+    all_bv = jnp.dot(qtl_geno, traits.add_eff.T) # Note the transpose on add_eff
 
-# Clarity for the Compiler: Instead of asking jax.jit to figure out which argument should be static (via static_argnums), we create a new function that doesn't even have a ploidy argument. We use functools.partial to create _set_pheno_internal with the value of ploidy already "baked in".
+    # Add intercepts using broadcasting
+    # (nInd, nTraits) + (nTraits,) -> (nInd, nTraits)
+    all_gvs = all_bv + traits.intercept
 
-# Simplified Tracing: The function that jax.jit sees now only contains arguments that will be traced as JAX arrays (key, pop, traits, etc.). The Python integer ploidy has been resolved before compilation begins. This avoids the internal confusion that was causing the TypeError.
-# This function remains the same, but will NOT be jitted directly
+    return all_gvs
+
+# # NOTE the jit decorator caused a 'missing fun' error for a static arg so partial used instead
+
 def _set_pheno_internal(
     key: jax.random.PRNGKey,
     pop: Population,
@@ -70,7 +79,7 @@ def _set_pheno_internal(
     if cor_e is None:
         cor_e = jnp.identity(n_traits)
 
-    gvs = _calculate_gvs_vectorized(pop, traits, ploidy)
+    gvs = _calculate_gvs_vectorized_alternative(pop, traits, ploidy)
 
     var_g = jnp.var(gvs, axis=0)
     var_e = (var_g / h2) - var_g
