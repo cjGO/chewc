@@ -10,67 +10,99 @@ from typing import Optional
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float
+from jaxtyping import Array, Float, Int
 
+# Assuming these are in their respective files
 from .pop import Population
-from .sp import SimParam
-from .trait import _calculate_genetic_params
+from .trait import TraitCollection
+from functools import partial
 
-# %% ../nbs/04_phenotype.ipynb 4
-def set_pheno(
+def _calculate_single_gv(
+    add_eff_slice: Float[Array, "nLoci"],
+    intercept_slice: float,
+    qtl_geno: Int[Array, "nInd nLoci"]
+) -> Float[Array, "nInd"]:
+    """Calculates GV for one trait given its parameters and the shared QTL genotypes."""
+    bv = jnp.dot(qtl_geno, add_eff_slice)
+    return bv + intercept_slice
+
+def _calculate_gvs_vectorized(
+    pop: Population,
+    traits: TraitCollection,
+    ploidy: int
+) -> Float[Array, "nInd nTraits"]:
+    """Calculates all genetic values for all traits in a vectorized manner."""
+    flat_geno_alleles = pop.geno.transpose((0, 1, 3, 2)).reshape(pop.nInd, -1, ploidy)
+    qtl_alleles = flat_geno_alleles[:, traits.loci_loc, :]
+    qtl_geno = jnp.sum(qtl_alleles, axis=2)
+
+    # --- FIX: Separate the vmap definition from the call ---
+
+    # 1. Create the vectorized function first
+    vmapped_calculator = jax.vmap(_calculate_single_gv, in_axes=(0, 0, None))
+
+    # 2. Then, call the new function
+    gvs = vmapped_calculator(traits.add_eff, traits.intercept, qtl_geno)
+    
+    # ---------------------------------------------------------
+
+    return gvs.T
+
+
+# # NOTE the jit decorator caused a 'missing fun' error, but using the partial function..abs
+
+# Clarity for the Compiler: Instead of asking jax.jit to figure out which argument should be static (via static_argnums), we create a new function that doesn't even have a ploidy argument. We use functools.partial to create _set_pheno_internal with the value of ploidy already "baked in".
+
+# Simplified Tracing: The function that jax.jit sees now only contains arguments that will be traced as JAX arrays (key, pop, traits, etc.). The Python integer ploidy has been resolved before compilation begins. This avoids the internal confusion that was causing the TypeError.
+# This function remains the same, but will NOT be jitted directly
+def _set_pheno_internal(
     key: jax.random.PRNGKey,
     pop: Population,
-    sim_param: SimParam,
+    traits: TraitCollection,
+    ploidy: int,  # ploidy is now a regular argument
     h2: Float[Array, "nTraits"],
     cor_e: Optional[Float[Array, "nTraits nTraits"]] = None,
 ) -> Population:
     """
-    Sets the phenotype of a population based on genetic values and environmental noise.
-
-    This function follows the AlphaSimR methodology by first calculating the total
-    genetic value (GV) for each individual. It then uses the provided heritability (h2)
-    to determine the amount of environmental variance, and finally adds this
-    environmental noise to the genetic values to produce the final phenotypes.
-
-    Args:
-        key: A JAX random key used for generating the environmental noise.
-        pop: The population for which to set the phenotype.
-        sim_param: The simulation parameters, which include the trait definitions.
-        h2: A JAX array with the narrow-sense heritability for each trait.
-        cor_e: An optional environmental correlation matrix. If not provided,
-               it is assumed that the environmental effects are uncorrelated.
-
-    Returns:
-        A new Population object with the `pheno` attribute updated.
+    Internal, non-JITted function to set phenotypes.
     """
-    n_traits = sim_param.n_traits
+    n_traits = traits.n_traits
     if cor_e is None:
         cor_e = jnp.identity(n_traits)
 
-    # 1. Calculate the genetic values for each trait
-    gvs = []
-    for trait in sim_param.traits:
-        genetic_params = _calculate_genetic_params(trait, pop, sim_param)
-        gvs.append(genetic_params["gv"])
-    gvs = jnp.stack(gvs, axis=1)
+    gvs = _calculate_gvs_vectorized(pop, traits, ploidy)
 
-    # 2. Calculate the environmental noise
     var_g = jnp.var(gvs, axis=0)
     var_e = (var_g / h2) - var_g
     cov_e = jnp.diag(jnp.sqrt(var_e)) @ cor_e @ jnp.diag(jnp.sqrt(var_e))
-
     environmental_noise = jax.random.multivariate_normal(
         key, jnp.zeros(n_traits), cov_e, (pop.nInd,)
     )
 
-    # 3. Calculate the final phenotypes
     pheno = gvs + environmental_noise
 
     return pop.replace(pheno=pheno)
 
+# This is the new public-facing, JIT-compatible function
+def set_pheno(
+    key: jax.random.PRNGKey,
+    pop: Population,
+    traits: TraitCollection,
+    ploidy: int,
+    h2: Float[Array, "nTraits"],
+    cor_e: Optional[Float[Array, "nTraits nTraits"]] = None,
+) -> Population:
+    """
+    JIT-compatible wrapper to set phenotypes.
 
+    The `ploidy` argument is handled by creating a partially applied
+    function that is then JIT-compiled.
+    """
+    # 1. Create a version of the internal function with `ploidy` "baked in"
+    jitted_calculator = jax.jit(
+        partial(_set_pheno_internal, ploidy=ploidy)
+    )
 
-
-
-
+    # 2. Call the new jitted function without the static argument
+    return jitted_calculator(key=key, pop=pop, traits=traits, h2=h2, cor_e=cor_e)
 
