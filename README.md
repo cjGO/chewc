@@ -52,7 +52,8 @@ import jax.numpy as jnp
 # Assuming your classes are in these files as discussed
 from chewc.sp import SimParam
 from chewc.pop import quick_haplo, Population
-from chewc.trait import add_trait_a # Import the new function
+from chewc.trait import add_trait_a
+from chewc.pheno import set_pheno # Import the new function
 
 # --- 1. JAX Setup ---
 key = jax.random.PRNGKey(42)
@@ -60,7 +61,7 @@ key = jax.random.PRNGKey(42)
 # --- 2. Define the Genome's "Blueprint" ---
 n_chr = 3
 n_loci_per_chr = 100
-ploidy = 2 
+ploidy = 2
 gen_map = jnp.array([jnp.linspace(0, 1, n_loci_per_chr) for _ in range(n_chr)])
 centromeres = jnp.full(n_chr, 0.5)
 
@@ -79,7 +80,7 @@ print("-" * 35)
 # --- 4. Create the Founder Population ---
 # Create the founder population using the initial SimParam object.
 key, pop_key = jax.random.split(key)
-n_founders = 50 
+n_founders = 50
 
 founder_pop = quick_haplo(
     key=pop_key,
@@ -134,77 +135,31 @@ for trait in SP_with_traits.traits:
     print(f"  - {trait.name}: intercept={trait.intercept:.4f}, n_qtl={trait.n_loci}")
 print("-" * 35)
 
+# --- 7. Set Phenotypes for the Founder Population ---
+key, pheno_key = jax.random.split(key)
 
-import matplotlib.pyplot as plt
+# Define the heritability and environmental correlation
+h2 = jnp.array([0.5, 0.7]) # Heritability for Trait 1 and Trait 2
+cor_e = jnp.array([[1.0, 0.3],
+                   [0.3, 1.0]]) # Environmental correlation
 
-# --- 6. Visualize the Trait Effects ---
+founder_pop_with_pheno = set_pheno(
+    key=pheno_key,
+    pop=founder_pop,
+    sim_param=SP_with_traits,
+    h2=h2,
+    cor_e=cor_e
+)
 
-# Extract the additive effects for each trait from the final SimParam object
-trait1_effects = SP_with_traits.traits[0].add_eff
-trait2_effects = SP_with_traits.traits[1].add_eff
-
-# Create the plot
-plt.figure(figsize=(10, 6))
-
-# Plot the histogram for Trait 1
-plt.hist(trait1_effects, bins=30, alpha=0.7, label='Trait 1 Effects', color='blue')
-
-# Plot the histogram for Trait 2 on the same axes
-plt.hist(trait2_effects, bins=30, alpha=0.7, label='Trait 2 Effects', color='red')
-
-# Add titles and labels for clarity
-plt.title('Distribution of Additive QTL Effects for Two Correlated Traits')
-plt.xlabel('Additive Effect Size')
-plt.ylabel('Frequency (Number of QTLs)')
-plt.legend()
-plt.grid(True, linestyle='--', alpha=0.6)
-
-# Show the plot
-plt.show()
-
-
-import matplotlib.pyplot as plt
-import jax.numpy as jnp
-
-# --- 7. Create a Scatterplot to Visualize Correlation ---
-
-# Extract the additive effects for each trait, assuming they are the first two traits
-trait1_effects = SP_with_traits.traits[0].add_eff
-trait2_effects = SP_with_traits.traits[1].add_eff
-
-# --- Create the Plot ---
-plt.figure(figsize=(8, 8))
-
-# Create the scatterplot
-plt.scatter(trait1_effects, trait2_effects, alpha=0.6, label='QTL Effects')
-
-# --- Add a Regression Line ---
-# This line helps visualize the strength and direction of the correlation
-m, b = jnp.polyfit(trait1_effects, trait2_effects, 1)
-plt.plot(trait1_effects, m * trait1_effects + b, color='red', linewidth=2, label='Regression Line')
-
-# --- Calculate and Display the Correlation Coefficient ---
-# This provides a quantitative measure of the correlation.
-correlation = jnp.corrcoef(trait1_effects, trait2_effects)[0, 1]
-plt.text(plt.xlim()[0] + 0.05, plt.ylim()[1] - 0.1, f'Correlation: {correlation:.4f}',
-         fontsize=12, bbox=dict(facecolor='white', alpha=0.5))
-
-
-# --- Add Titles and Labels ---
-plt.title('Correlation of Additive Effects Between Trait 1 and Trait 2')
-plt.xlabel('Trait 1 Additive Effect')
-plt.ylabel('Trait 2 Additive Effect')
-plt.axhline(0, color='grey', lw=0.5, linestyle='--')
-plt.axvline(0, color='grey', lw=0.5, linestyle='--')
-plt.legend()
-plt.grid(True, linestyle='--', alpha=0.6)
-plt.axis('equal') # Ensure the plot axes are scaled equally
-
-# Show the plot
-plt.show()
+print("\n--- Phenotypes Calculated for Founder Population ---")
+print(founder_pop_with_pheno)
+print(f"\nPhenotype array shape: {founder_pop_with_pheno.pheno.shape}")
+print("\nExample phenotypes (first 5 individuals):")
+print(founder_pop_with_pheno.pheno[:5, :])
+print("-" * 35)
 ```
 
-    WARNING:2025-07-12 17:49:03,319:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+    WARNING:2025-07-12 19:13:04,636:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
 
 
     --- Initial Simulation Parameters Created ---
@@ -230,6 +185,15 @@ plt.show()
       - Trait2: intercept=17.4828, n_qtl=300
     -----------------------------------
 
-![](index_files/figure-commonmark/cell-2-output-3.png)
+    --- Phenotypes Calculated for Founder Population ---
+    Population(nInd=50, nTraits=0, has_ebv=No)
 
-![](index_files/figure-commonmark/cell-2-output-4.png)
+    Phenotype array shape: (50, 2)
+
+    Example phenotypes (first 5 individuals):
+    [[ 9.620646 18.488604]
+     [ 7.924079 16.82735 ]
+     [14.140716 22.798744]
+     [10.944614 22.986835]
+     [12.379781 22.679428]]
+    -----------------------------------
