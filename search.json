@@ -1,0 +1,112 @@
+[
+  {
+    "objectID": "pheno.html",
+    "href": "pheno.html",
+    "title": "core",
+    "section": "",
+    "text": "source\n\nset_pheno\n\n set_pheno (key:&lt;function PRNGKey&gt;, pop:chewc.pop.Population,\n            traits:chewc.trait.TraitCollection, ploidy:int,\n            h2:jaxtyping.Float[Array,'nTraits'],\n            cor_e:Optional[jaxtyping.Float[Array,'nTraitsnTraits']]=None)\n\n*JIT-compatible wrapper to set phenotypes.\nThe ploidy argument is handled by creating a partially applied function that is then JIT-compiled.*",
+    "crumbs": [
+      "core"
+    ]
+  },
+  {
+    "objectID": "cross.html",
+    "href": "cross.html",
+    "title": "core",
+    "section": "",
+    "text": "source\n\nfoo\n\n foo ()",
+    "crumbs": [
+      "core"
+    ]
+  },
+  {
+    "objectID": "trait.html",
+    "href": "trait.html",
+    "title": "trait",
+    "section": "",
+    "text": "source\n\nadd_trait_a\n\n add_trait_a (key:&lt;function PRNGKey&gt;, sim_param:chewc.sp.SimParam,\n              n_qtl_per_chr:int, mean:jaxtyping.Float[Array,'nTraits'],\n              var:jaxtyping.Float[Array,'nTraits'], cor_a:Optional[jaxtypi\n              ng.Float[Array,'nTraitsnTraits']]=None)\n\n*Adds one or more new additive traits to the simulation parameters by creating a vectorized TraitCollection object.\nThis function calculates the genetic effects and intercepts for each trait, then stacks them into single JAX arrays within a TraitCollection. This data structure is designed for efficient, JIT-compatible computation on a GPU.*\n\nsource\n\n\nTraitCollection\n\n TraitCollection (loci_loc:jaxtyping.Int[Array,'nLoci'],\n                  add_eff:jaxtyping.Float[Array,'nTraitsnLoci'],\n                  intercept:jaxtyping.Float[Array,'nTraits'])\n\nA JAX-native container for all trait parameters, designed for vectorization.\n\nsource\n\n\nTraitA\n\n TraitA (loci_per_chr:jaxtyping.Int[Array,'nChr'],\n         loci_loc:jaxtyping.Int[Array,'nLoci'], name:str,\n         add_eff:jaxtyping.Float[Array,'nLoci'], intercept:float=0.0)\n\n*Defines an additive trait, extending LociMap with genetic effect parameters.\nAttributes: add_eff (Float[Array, “nLoci”]): The additive effect for each locus. intercept (float): A global value added to the genetic value of all individuals for this trait, used to adjust the trait mean.*\n\nsource\n\n\nLociMap\n\n LociMap (loci_per_chr:jaxtyping.Int[Array,'nChr'],\n          loci_loc:jaxtyping.Int[Array,'nLoci'], name:str)\n\n*Defines a set of loci on the genome. Serves as a base class for SNP chips and Traits. This is a JAX-native Pytree, making it compatible with JIT compilation.\nAttributes: loci_per_chr (Int[Array, “nChr”]): The number of loci on each chromosome. loci_loc (Int[Array, “nLoci”]): The specific indices of the loci on the genetic map. name (str): The name of this loci map (e.g., “Trait1”, “Chip1”). Note: String attributes make this class a “static” Pytree.*",
+    "crumbs": [
+      "trait"
+    ]
+  },
+  {
+    "objectID": "simparam.html",
+    "href": "simparam.html",
+    "title": "SimParam",
+    "section": "",
+    "text": "source\n\nSimParam\n\n SimParam (gen_map:jax.Array, centromere:jax.Array, ploidy:int,\n           traits:Optional[ForwardRef('TraitCollection')]=None,\n           snp_chips:List[ForwardRef('LociMap')]=&lt;factory&gt;,\n           founderPop:Optional[ForwardRef('Population')]=None,\n           sexes:str='no', recomb_params:tuple=(2.6, 0.0, 0.0),\n           n_threads:int=1, track_pedigree:bool=False,\n           track_recomb:bool=False, last_id:int=0,\n           pedigree:Optional[jax.Array]=None,\n           var_e:Optional[jax.Array]=None)\n\nA container for all global simulation parameters.",
+    "crumbs": [
+      "SimParam"
+    ]
+  },
+  {
+    "objectID": "meiosis.html",
+    "href": "meiosis.html",
+    "title": "core",
+    "section": "",
+    "text": "source\n\nfoo\n\n foo ()",
+    "crumbs": [
+      "core"
+    ]
+  },
+  {
+    "objectID": "population.html",
+    "href": "population.html",
+    "title": "Population",
+    "section": "",
+    "text": "source\n\nquick_haplo\n\n quick_haplo (key:&lt;function PRNGKey&gt;, sim_param:chewc.sp.SimParam,\n              n_ind:int, inbred:bool=False)\n\n*Creates a new population with randomly generated haplotypes, analogous to AlphaSimR’s quickHaplo function.\nThe structure of the genome (chromosomes, loci, ploidy) is defined by the provided SimParam object.\nArgs: key: A JAX random key. Must be provided by the user to ensure reproducibility. sim_param: A SimParam object that defines the genome structure. n_ind: Number of individuals to create. inbred: If True, individuals will be fully inbred (homozygous at all loci).\nReturns: A new Population object with random founder individuals.*\n\nsource\n\n\nPopulation\n\n Population (geno:jax.Array, id:jax.Array, iid:jax.Array,\n             mother:jax.Array, father:jax.Array, sex:jax.Array,\n             pheno:jax.Array, fixEff:jax.Array,\n             bv:Optional[jax.Array]=None, dd:Optional[jax.Array]=None,\n             aa:Optional[jax.Array]=None, ebv:Optional[jax.Array]=None,\n             gxe:Optional[jax.Array]=None, misc:Dict=&lt;factory&gt;,\n             miscPop:Dict=&lt;factory&gt;)\n\n*A container for all data related to a population of individuals, designed for JAX-based genetic simulations.\nThis structure is immutable. All operations that modify a population should return a new Population object.\nAttributes: geno (jnp.ndarray): A 4D array representing the genotypes of the population. Shape: (nInd, nChr, ploidy, nLoci). dtype: jnp.uint8.\nid (jnp.ndarray): The primary, user-facing identifier for each individual.\n    These IDs may not be contiguous or sorted. Shape: `(nInd,)`.\niid (jnp.ndarray): The internal, zero-indexed, contiguous identifier.\n    Crucial for robust indexing in JAX operations. Shape: `(nInd,)`.\nmother (jnp.ndarray): Array of internal IDs (`iid`) for the mother of each\n    individual. A value of -1 indicates no known mother. Shape: `(nInd,)`.\nfather (jnp.ndarray): Array of internal IDs (`iid`) for the father of each\n    individual. A value of -1 indicates no known father. Shape: `(nInd,)`.\nsex (jnp.ndarray): The sex of each individual, represented numerically\n    (e.g., 0 for male, 1 for female). dtype: `jnp.int8`. Shape: `(nInd,)`.\n\npheno (jnp.ndarray): The phenotypic values for each individual.\n    Shape: `(nInd, nTraits)`.\nfixEff (jnp.ndarray): The value of a fixed effect for each individual,\n    often used as an intercept in genomic selection models. Shape: `(nInd,)`.\n\nbv (Optional[jnp.ndarray]): The true breeding values (additive genetic effects)\n    for each individual. Shape: `(nInd, nTraits)`.\ndd (Optional[jnp.ndarray]): The true dominance deviations for each individual.\n    Shape: `(nInd, nTraits)`.\naa (Optional[jnp.ndarray]): The true additive-by-additive epistatic deviations\n    for each individual. Shape: `(nInd, nTraits)`.\n\nebv (Optional[jnp.ndarray]): The estimated breeding values for each\n    individual. Shape: `(nInd, nTraits)`.\ngxe (Optional[jnp.ndarray]): Genotype-by-environment interaction effects.\n    Shape depends on the specific GxE model.\n\nmisc (Dict): A dictionary for storing miscellaneous, non-JAX-critical\n    metadata about individuals.\nmiscPop (Dict): A dictionary for storing miscellaneous, non-JAX-critical\n    metadata about the entire population.*",
+    "crumbs": [
+      "Population"
+    ]
+  },
+  {
+    "objectID": "core.html",
+    "href": "core.html",
+    "title": "core",
+    "section": "",
+    "text": "source\n\nfoo\n\n foo ()",
+    "crumbs": [
+      "core"
+    ]
+  },
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "chewc",
+    "section": "",
+    "text": "# #| hide\n# from chewc.core import *\n# from chewc.pop import *\n# from chewc.sp import *\n# from chewc.trait import *\nThis file will become your README and also the index of your documentation.",
+    "crumbs": [
+      "chewc"
+    ]
+  },
+  {
+    "objectID": "index.html#developer-guide",
+    "href": "index.html#developer-guide",
+    "title": "chewc",
+    "section": "Developer Guide",
+    "text": "Developer Guide\nIf you are new to using nbdev here are some useful pointers to get you started.\n\nInstall chewc in Development mode\n# make sure chewc package is installed in development mode\n$ pip install -e .\n\n# make changes under nbs/ directory\n# ...\n\n# compile to have changes apply to chewc\n$ nbdev_prepare",
+    "crumbs": [
+      "chewc"
+    ]
+  },
+  {
+    "objectID": "index.html#usage",
+    "href": "index.html#usage",
+    "title": "chewc",
+    "section": "Usage",
+    "text": "Usage\n\nInstallation\nInstall latest from the GitHub repository:\n$ pip install git+https://github.com/cjGO/chewc.git\n\n\nDocumentation\nDocumentation can be found hosted on this GitHub repository’s pages.",
+    "crumbs": [
+      "chewc"
+    ]
+  },
+  {
+    "objectID": "index.html#how-to-use",
+    "href": "index.html#how-to-use",
+    "title": "chewc",
+    "section": "How to use",
+    "text": "How to use\n\nimport jax\nimport jax.numpy as jnp\n\n# Import the necessary classes and functions from your library\nfrom chewc.sp import SimParam\nfrom chewc.pop import quick_haplo, Population\n# Import the refactored trait-related classes and functions\nfrom chewc.trait import add_trait_a, TraitCollection\n# Import the JIT-compatible phenotype function\nfrom chewc.pheno import set_pheno\n\n# --- 1. JAX Setup ---\nkey = jax.random.PRNGKey(42)\n\n# --- 2. Define the Genome's \"Blueprint\" ---\nn_chr = 3\nn_loci_per_chr = 100\nploidy = 2\ngen_map = jnp.array([jnp.linspace(0, 1, n_loci_per_chr) for _ in range(n_chr)])\ncentromeres = jnp.full(n_chr, 0.5)\n\n# --- 3. Instantiate Initial Simulation Parameters ---\n# This remains the same.\nSP = SimParam(\n    gen_map=gen_map,\n    centromere=centromeres,\n    ploidy=ploidy\n)\n\nprint(\"--- Initial Simulation Parameters Created ---\")\nprint(SP)\nprint(\"-\" * 35)\n\n# --- 4. Create the Founder Population ---\n# This remains the same.\nkey, pop_key = jax.random.split(key)\nn_founders = 50\n\nfounder_pop = quick_haplo(\n    key=pop_key,\n    sim_param=SP,\n    n_ind=n_founders,\n    inbred=False\n)\n\nprint(\"\\n--- Founder Population Created ---\")\nprint(founder_pop)\nprint(f\"Genotype array shape: {founder_pop.geno.shape}\")\nprint(\"-\" * 35)\n\n\n# --- 5. Finalize Simulation Parameters ---\n# This remains the same.\nSP = SP.replace(founderPop=founder_pop)\n\nprint(\"\\n--- Simulation Parameters Finalized with Founder Pop ---\")\nprint(SP)\nprint(f\"Number of traits before: {SP.n_traits}\")\nprint(\"-\" * 35)\n\n\n# --- 6. Add Two Correlated Additive Traits ---\n# This section is MODIFIED to correctly inspect the new TraitCollection\nkey, trait_key = jax.random.split(key)\n\nn_qtl_per_chr = 100\ntrait_means = jnp.array([10.0, 20.0])\ntrait_vars = jnp.array([1.5, 2.5])\ntrait_cor = jnp.array([[1.0, 0.8],\n                       [0.8, 1.0]])\n\n# This function call is the same, but what it returns has changed.\nSP_with_traits = add_trait_a(\n    key=trait_key,\n    sim_param=SP,\n    n_qtl_per_chr=n_qtl_per_chr,\n    mean=trait_means,\n    var=trait_vars,\n    cor_a=trait_cor\n)\n\nprint(\"\\n--- Correlated Additive Traits Added ---\")\n# The __repr__ for SimParam will now work correctly\nprint(f\"SimParam object updated: {SP_with_traits}\")\n\n# **FIXED**: We now access the single TraitCollection object\ntrait_collection = SP_with_traits.traits\n\n# **FIXED**: Inspect the properties of the vectorized TraitCollection\nprint(f\"Number of traits after: {trait_collection.n_traits}\")\nprint(\"\\nDetails of the new TraitCollection:\")\nprint(f\"  - Number of shared QTL: {trait_collection.n_loci}\")\nprint(f\"  - Shape of additive effects array: {trait_collection.add_eff.shape}\")\nprint(f\"  - Intercepts for all traits: {trait_collection.intercept}\")\nprint(\"-\" * 35)\n\n# --- 7. Set Phenotypes for the Founder Population ---\n# This section is MODIFIED to use the new JIT-compatible function signature\nkey, pheno_key = jax.random.split(key)\n\nh2 = jnp.array([0.5, 0.7])\ncor_e = jnp.array([[1.0, 0.3],\n                   [0.3, 1.0]])\n\n# **FIXED**: Calling the refactored, JIT-compatible set_pheno function.\n# We now pass the TraitCollection object directly.\nfounder_pop_with_pheno = set_pheno(\n    key=pheno_key,\n    pop=founder_pop,\n    traits=trait_collection,\n    ploidy=SP_with_traits.ploidy, # Pass ploidy from the SimParam object\n    h2=h2,\n    cor_e=cor_e\n)\n# The first time this runs, JAX will JIT-compile the function.\n# Subsequent calls will be lightning fast! ⚡️\nprint(\"\\n--- Phenotypes Calculated for Founder Population (JIT-compiled) ---\")\nprint(founder_pop_with_pheno)\nprint(f\"\\nPhenotype array shape: {founder_pop_with_pheno.pheno.shape}\")\nprint(\"\\nExample phenotypes (first 5 individuals):\")\nprint(founder_pop_with_pheno.pheno[:5, :])\nprint(\"-\" * 35)\n\nWARNING:2025-07-12 21:12:54,329:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.\n\n\n--- Initial Simulation Parameters Created ---\nSimParam(nChr=3, nTraits=0, ploidy=2, sexes='no')\n-----------------------------------\n\n--- Founder Population Created ---\nPopulation(nInd=50, nTraits=0, has_ebv=No)\nGenotype array shape: (50, 3, 2, 100)\n-----------------------------------\n\n--- Simulation Parameters Finalized with Founder Pop ---\nSimParam(nChr=3, nTraits=0, ploidy=2, sexes='no')\nNumber of traits before: 0\n-----------------------------------\n\n--- Correlated Additive Traits Added ---\nSimParam object updated: SimParam(nChr=3, nTraits=2, ploidy=2, sexes='no')\nNumber of traits after: 2\n\nDetails of the new TraitCollection:\n  - Number of shared QTL: 300\n  - Shape of additive effects array: (2, 300)\n  - Intercepts for all traits: [ 9.365508 17.48284 ]\n-----------------------------------\n\n--- Phenotypes Calculated for Founder Population (JIT-compiled) ---\nPopulation(nInd=50, nTraits=0, has_ebv=No)\n\nPhenotype array shape: (50, 2)\n\nExample phenotypes (first 5 individuals):\n[[ 9.620646 18.488605]\n [ 7.924078 16.82735 ]\n [14.140717 22.798744]\n [10.944615 22.986835]\n [12.37978  22.679428]]\n-----------------------------------",
+    "crumbs": [
+      "chewc"
+    ]
+  }
+]
