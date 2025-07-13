@@ -14,7 +14,7 @@ from flax.struct import dataclass as flax_dataclass
 from jaxtyping import Array, Float, Int, PyTree
 
 # Assuming Population and SimParam are in these locations
-from .pop import Population
+from .population import Population
 from .sp import SimParam
 
 # --- Base Loci and Trait Structures ---
