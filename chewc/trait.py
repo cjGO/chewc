@@ -21,16 +21,6 @@ from .sp import SimParam
 
 @flax_dataclass(frozen=True)
 class LociMap:
-    """
-    Defines a set of loci on the genome. Serves as a base class for SNP chips and Traits.
-    This is a JAX-native Pytree, making it compatible with JIT compilation.
-
-    Attributes:
-        loci_per_chr (Int[Array, "nChr"]): The number of loci on each chromosome.
-        loci_loc (Int[Array, "nLoci"]): The specific indices of the loci on the genetic map.
-        name (str): The name of this loci map (e.g., "Trait1", "Chip1").
-                      Note: String attributes make this class a "static" Pytree.
-    """
     loci_per_chr: Int[Array, "nChr"]
     loci_loc: Int[Array, "nLoci"]
     name: str
@@ -41,33 +31,14 @@ class LociMap:
 
 @flax_dataclass(frozen=True)
 class TraitA(LociMap):
-    """
-    Defines an additive trait, extending LociMap with genetic effect parameters.
-
-    Attributes:
-        add_eff (Float[Array, "nLoci"]): The additive effect for each locus.
-        intercept (float): A global value added to the genetic value of all individuals
-                           for this trait, used to adjust the trait mean.
-    """
     add_eff: Float[Array, "nLoci"]
     intercept: float = 0.0
 
-# In trait.py
 @flax_dataclass(frozen=True)
 class TraitCollection:
-    """
-    A JAX-native container for all trait parameters, designed for vectorization.
-    """
-    # --- Loci Info (assuming shared across traits for now) ---
     loci_loc: Int[Array, "nLoci"]
-
-    # --- Vectorized Trait Parameters ---
-    # Shape: (nTraits, nLoci)
     add_eff: Float[Array, "nTraits nLoci"]
-    # Shape: (nTraits,)
     intercept: Float[Array, "nTraits"]
-
-    # ... other potential vectorized parameters (dominance, etc.) ...
 
     @property
     def n_traits(self) -> int:
@@ -77,50 +48,20 @@ class TraitCollection:
     def n_loci(self) -> int:
         return self.loci_loc.shape[0]
 
-
 # --- Helper Functions ---
 
-def _calculate_genetic_params(
-    trait: TraitA,
+def _calculate_gvs_vectorized_alternative(
     pop: Population,
-    sim_param: SimParam # FIX: Added sim_param to the function signature
-) -> PyTree:
-    """
-    Calculates genetic parameters (mean, variance) for a given trait in a population.
-    This is a pure function, making it JAX-composable.
-
-    Args:
-        trait: A TraitA object defining the QTL effects.
-        pop: A Population object containing the genotypes.
-        sim_param: The simulation parameters, needed for rules like ploidy.
-
-    Returns:
-        A Pytree (dict) containing the breeding values (bv), genetic values (gv),
-        and the population variance of the breeding values.
-    """
-    # 1. Flatten the chromosome and loci dimensions of the main genotype array.
-    # Reshaped shape: (nInd, nChr * nLoci, ploidy)
-    # FIX: Using sim_param.ploidy instead of pop.ploidy
-    flat_geno_alleles = pop.geno.transpose((0, 1, 3, 2)).reshape(pop.nInd, -1, sim_param.ploidy)
-
-    # 2. Use the trait's global loci locations to select the QTL alleles.
-    qtl_alleles = flat_geno_alleles[:, trait.loci_loc, :]
-
-    # 3. Sum across the ploidy dimension to get the genotype state for each QTL.
+    traits: TraitCollection,
+    ploidy: int
+) -> Float[Array, "nInd nTraits"]:
+    """Calculates all genetic values using a single matrix multiplication."""
+    flat_geno_alleles = pop.geno.transpose((0, 1, 3, 2)).reshape(pop.nInd, -1, ploidy)
+    qtl_alleles = flat_geno_alleles[:, traits.loci_loc, :]
     qtl_geno = jnp.sum(qtl_alleles, axis=2)
-
-    # 4. Calculate breeding values (bv).
-    bv = jnp.dot(qtl_geno, trait.add_eff)
-
-    # For an additive trait, the total genetic value (gv) is the breeding value plus the intercept.
-    gv = bv + trait.intercept
-
-    return {
-        "bv": bv,
-        "gv": gv,
-        "var_bv": jnp.var(bv)
-    }
-
+    all_bv = jnp.dot(qtl_geno, traits.add_eff.T)
+    all_gvs = all_bv + traits.intercept
+    return all_gvs
 
 # --- Public Trait-Adding Function ---
 def add_trait_a(
@@ -131,83 +72,51 @@ def add_trait_a(
     var: Float[Array, "nTraits"],
     cor_a: Optional[Float[Array, "nTraits nTraits"]] = None
 ) -> SimParam:
-    """
-    Adds one or more new additive traits to the simulation parameters by creating
-    a vectorized TraitCollection object.
-
-    This function calculates the genetic effects and intercepts for each trait,
-    then stacks them into single JAX arrays within a TraitCollection. This
-    data structure is designed for efficient, JIT-compatible computation on a GPU.
-    """
-    # --- 1. Validation and Setup (Unchanged) ---
+    """Adds one or more new additive traits to the simulation parameters."""
     n_traits = mean.shape[0]
     assert mean.shape == var.shape, "Mean and variance vectors must have the same shape."
     if cor_a is None:
         cor_a = jnp.identity(n_traits)
-    else:
-        assert cor_a.shape == (n_traits, n_traits), "Correlation matrix has incorrect dimensions."
-        assert jnp.allclose(cor_a, cor_a.T), "Correlation matrix must be symmetric."
 
     key, sample_key, qtl_key = jax.random.split(key, 3)
 
-    # --- 2. QTL and Raw Effect Generation (Unchanged) ---
     n_total_qtl = n_qtl_per_chr * sim_param.n_chr
     all_loci_indices = jnp.arange(sim_param.gen_map.size)
-    # QTL locations are shared for all traits being added
     qtl_loc = jax.random.choice(qtl_key, all_loci_indices, shape=(n_total_qtl,), replace=False)
     qtl_loc = jnp.sort(qtl_loc)
 
     raw_effects = jax.random.normal(sample_key, (n_total_qtl, n_traits))
     cholesky_matrix = jnp.linalg.cholesky(cor_a)
-    # Shape: (n_qtl, n_traits)
     correlated_raw_effects = jnp.dot(raw_effects, cholesky_matrix.T)
 
-    # --- 3. REFACTORED: Calculate Parameters and Collect for Vectorization ---
-    # Instead of building a list of TraitA objects, we build lists of their parameters.
     all_scaled_effects = []
     all_intercepts = []
 
-    # This loop is acceptable because it's part of a setup function that is
-    # not called frequently. The goal is to PRODUCE a JIT-compatible object.
-    for i in range(n_traits):
-        # Create a temporary TraitA object for the sole purpose of calculating
-        # the initial genetic variance with the existing helper function.
-        temp_trait = TraitA(
-            loci_per_chr=jnp.full((sim_param.n_chr,), n_qtl_per_chr),
-            loci_loc=qtl_loc,
-            name=f"temp_trait_{i}",
-            add_eff=correlated_raw_effects[:, i] # Effects for the i-th trait
-        )
+    # Create a temporary TraitCollection to calculate initial variance
+    temp_traits = TraitCollection(
+        loci_loc=qtl_loc,
+        add_eff=correlated_raw_effects.T, # Transpose to (nTraits, nQtl)
+        intercept=jnp.zeros(n_traits)
+    )
+    
+    # Calculate initial breeding values and variance on the founder population
+    initial_bvs = _calculate_gvs_vectorized_alternative(sim_param.founderPop, temp_traits, sim_param.ploidy)
+    initial_vars = jnp.var(initial_bvs, axis=0)
 
-        # Calculate initial genetic variance using the founder population
-        genetic_params = _calculate_genetic_params(temp_trait, sim_param.founderPop, sim_param)
-        initial_var = genetic_params['var_bv']
+    # Vectorized calculation of scaling factors and intercepts
+    scaling_factors = jnp.sqrt(var / (initial_vars + 1e-8))
+    initial_means = jnp.mean(initial_bvs, axis=0)
+    final_intercepts = mean - (initial_means * scaling_factors)
+    
+    # Scale all effects at once using broadcasting
+    final_add_eff = correlated_raw_effects * scaling_factors # (nQtl, nTraits) * (nTraits,)
 
-        # Calculate the scaling factor for the current trait
-        scaling_factor = jnp.sqrt(var[i] / (initial_var + 1e-8))
-
-        # Scale the effects and store them
-        scaled_effects = temp_trait.add_eff * scaling_factor
-        all_scaled_effects.append(scaled_effects)
-
-        # Calculate the intercept and store it
-        initial_mean_bv = jnp.mean(genetic_params['bv'])
-        intercept = mean[i] - (initial_mean_bv * scaling_factor)
-        all_intercepts.append(intercept)
-
-    # --- 4. REFACTORED: Assemble the Vectorized TraitCollection ---
-    # Stack the lists of parameters into single, unified JAX arrays.
-    final_add_eff = jnp.stack(all_scaled_effects, axis=0)  # Shape: (nTraits, nQtl)
-    final_intercepts = jnp.array(all_intercepts)           # Shape: (nTraits,)
-
-    # Create the single, vectorized trait collection object.
     trait_collection = TraitCollection(
         loci_loc=qtl_loc,
-        add_eff=final_add_eff,
+        add_eff=final_add_eff.T, # Store as (nTraits, nQtl)
         intercept=final_intercepts
     )
 
-    # --- 5. Return New SimParam with the Vectorized TraitCollection ---
-    # The .replace() method returns a new, immutable SimParam object.
     return sim_param.replace(traits=trait_collection)
+
 

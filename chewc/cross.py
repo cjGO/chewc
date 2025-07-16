@@ -6,6 +6,16 @@
 __all__ = ['make_cross']
 
 # %% ../nbs/06_cross.ipynb 4
+import jax
+from jax import vmap
+import jax.numpy as jnp
+from .sp import SimParam
+from .population import quick_haplo, Population
+from .trait import add_trait_a, TraitCollection
+from .pheno import set_pheno
+from .meiosis import *
+
+
 def make_cross(key: jax.random.PRNGKey, 
                pop: Population, 
                cross_plan: jnp.ndarray, 

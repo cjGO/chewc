@@ -6,94 +6,53 @@
 __all__ = ['set_pheno']
 
 # %% ../nbs/04_pheno.ipynb 3
+# chewc/pheno.py
+
 from typing import Optional
+from functools import partial
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Float
 
-# Assuming these are in their respective files
-from .pop import Population
-from .trait import TraitCollection
-from functools import partial
+from .population import Population
+from .trait import TraitCollection, _calculate_gvs_vectorized_alternative # IMPORT FIXED
 
-def _calculate_single_gv(
-    add_eff_slice: Float[Array, "nLoci"],
-    intercept_slice: float,
-    qtl_geno: Int[Array, "nInd nLoci"]
-) -> Float[Array, "nInd"]:
-    """Calculates GV for one trait given its parameters and the shared QTL genotypes."""
-    bv = jnp.dot(qtl_geno, add_eff_slice)
-    return bv + intercept_slice
 
-def _calculate_gvs_vectorized(
-    pop: Population,
-    traits: TraitCollection,
-    ploidy: int
-) -> Float[Array, "nInd nTraits"]:
-    """Calculates all genetic values for all traits in a vectorized manner."""
-    flat_geno_alleles = pop.geno.transpose((0, 1, 3, 2)).reshape(pop.nInd, -1, ploidy)
-    qtl_alleles = flat_geno_alleles[:, traits.loci_loc, :]
-    qtl_geno = jnp.sum(qtl_alleles, axis=2)
-
-    vmapped_calculator = jax.vmap(_calculate_single_gv, in_axes=(0, 0, None))
-    gvs = vmapped_calculator(traits.add_eff, traits.intercept, qtl_geno)
-    return gvs.T
-
-#uses dot product instead of vmap
-def _calculate_gvs_vectorized_alternative(
-    pop: Population,
-    traits: TraitCollection,
-    ploidy: int
-) -> Float[Array, "nInd nTraits"]:
-    """Calculates all genetic values using a single matrix multiplication."""
-    # Genotype calculation is the same
-    flat_geno_alleles = pop.geno.transpose((0, 1, 3, 2)).reshape(pop.nInd, -1, ploidy)
-    qtl_alleles = flat_geno_alleles[:, traits.loci_loc, :]
-    qtl_geno = jnp.sum(qtl_alleles, axis=2) # Shape: (nInd, nLoci)
-
-    # --- The Alternative ---
-    # A single, highly optimized kernel call
-    # (nInd, nLoci) @ (nLoci, nTraits) -> (nInd, nTraits)
-    all_bv = jnp.dot(qtl_geno, traits.add_eff.T) # Note the transpose on add_eff
-
-    # Add intercepts using broadcasting
-    # (nInd, nTraits) + (nTraits,) -> (nInd, nTraits)
-    all_gvs = all_bv + traits.intercept
-
-    return all_gvs
-
-# # NOTE the jit decorator caused a 'missing fun' error for a static arg so partial used instead
-
+@partial(jax.jit, static_argnames=("ploidy",))
 def _set_pheno_internal(
     key: jax.random.PRNGKey,
     pop: Population,
     traits: TraitCollection,
-    ploidy: int,  # ploidy is now a regular argument
+    ploidy: int,
     h2: Float[Array, "nTraits"],
     cor_e: Optional[Float[Array, "nTraits nTraits"]] = None,
 ) -> Population:
-    """
-    Internal, non-JITted function to set phenotypes.
-    """
+    """Internal, JITted function to set phenotypes."""
     n_traits = traits.n_traits
     if cor_e is None:
         cor_e = jnp.identity(n_traits)
 
+    # 1. Calculate genetic values (now uses the imported function)
     gvs = _calculate_gvs_vectorized_alternative(pop, traits, ploidy)
 
+    # 2. Calculate environmental noise
     var_g = jnp.var(gvs, axis=0)
     var_e = (var_g / h2) - var_g
-    cov_e = jnp.diag(jnp.sqrt(var_e)) @ cor_e @ jnp.diag(jnp.sqrt(var_e))
+    cov_e = jnp.diag(jnp.sqrt(jnp.maximum(var_e, 0))) @ cor_e @ jnp.diag(jnp.sqrt(jnp.maximum(var_e, 0)))
+    
     environmental_noise = jax.random.multivariate_normal(
         key, jnp.zeros(n_traits), cov_e, (pop.nInd,)
     )
 
     pheno = gvs + environmental_noise
 
-    return pop.replace(pheno=pheno)
+    # 3. Update population object with all new values
+    return pop.replace(
+        pheno=pheno,
+        bv=gvs - traits.intercept # Assuming additive model for now
+    )
 
-# This is the new public-facing, JIT-compatible function
 def set_pheno(
     key: jax.random.PRNGKey,
     pop: Population,
@@ -102,17 +61,5 @@ def set_pheno(
     h2: Float[Array, "nTraits"],
     cor_e: Optional[Float[Array, "nTraits nTraits"]] = None,
 ) -> Population:
-    """
-    JIT-compatible wrapper to set phenotypes.
-
-    The `ploidy` argument is handled by creating a partially applied
-    function that is then JIT-compiled.
-    """
-    # 1. Create a version of the internal function with `ploidy` "baked in"
-    jitted_calculator = jax.jit(
-        partial(_set_pheno_internal, ploidy=ploidy)
-    )
-
-    # 2. Call the new jitted function without the static argument
-    return jitted_calculator(key=key, pop=pop, traits=traits, h2=h2, cor_e=cor_e)
-
+    """JIT-compatible wrapper to set phenotypes."""
+    return _set_pheno_internal(key, pop, traits, ploidy, h2, cor_e)

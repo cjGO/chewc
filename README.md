@@ -46,160 +46,116 @@ import jax.numpy as jnp
 
 # Import the necessary classes and functions from your library
 from chewc.sp import SimParam
-from chewc.population import quick_haplo, Population
-# Import the refactored trait-related classes and functions
-from chewc.trait import add_trait_a, TraitCollection
-# Import the JIT-compatible phenotype function
+from chewc.population import Population, quick_haplo
+from chewc.trait import TraitCollection, add_trait_a
 from chewc.pheno import set_pheno
+from chewc.cross import make_cross
+from chewc.pipe import update_pop_values # <-- Import from the new module
 
 # --- 1. JAX Setup ---
 key = jax.random.PRNGKey(42)
 
-# --- 2. Define the Genome's "Blueprint" ---
-n_chr = 3
-n_loci_per_chr = 100
-ploidy = 2
+# --- 2-6. (Setup code remains the same as before) ---
+# Define Genome Blueprint
+n_chr, n_loci_per_chr, ploidy = 3, 100, 2
 gen_map = jnp.array([jnp.linspace(0, 1, n_loci_per_chr) for _ in range(n_chr)])
 centromeres = jnp.full(n_chr, 0.5)
 
-# --- 3. Instantiate Initial Simulation Parameters ---
-# This remains the same.
-SP = SimParam(
-    gen_map=gen_map,
-    centromere=centromeres,
-    ploidy=ploidy
-)
+# Instantiate SimParam
+SP = SimParam(gen_map=gen_map, centromere=centromeres, ploidy=ploidy)
 
-print("--- Initial Simulation Parameters Created ---")
-print(SP)
-print("-" * 35)
-
-# --- 4. Create the Founder Population ---
-# This remains the same.
+# Create Founder Population
 key, pop_key = jax.random.split(key)
-n_founders = 50
-
-founder_pop = quick_haplo(
-    key=pop_key,
-    sim_param=SP,
-    n_ind=n_founders,
-    inbred=False
-)
-
-print("\n--- Founder Population Created ---")
-print(founder_pop)
-print(f"Genotype array shape: {founder_pop.geno.shape}")
-print("-" * 35)
-
-
-# --- 5. Finalize Simulation Parameters ---
-# This remains the same.
+founder_pop = quick_haplo(key=pop_key, sim_param=SP, n_ind=100, inbred=False)
 SP = SP.replace(founderPop=founder_pop)
 
-print("\n--- Simulation Parameters Finalized with Founder Pop ---")
-print(SP)
-print(f"Number of traits before: {SP.n_traits}")
-print("-" * 35)
-
-
-# --- 6. Add Two Correlated Additive Traits ---
-# This section is MODIFIED to correctly inspect the new TraitCollection
+# Add Single Additive Trait
 key, trait_key = jax.random.split(key)
-
-n_qtl_per_chr = 100
-trait_means = jnp.array([10.0, 20.0])
-trait_vars = jnp.array([1.5, 2.5])
-trait_cor = jnp.array([[1.0, 0.8],
-                       [0.8, 1.0]])
-
-# This function call is the same, but what it returns has changed.
-SP_with_traits = add_trait_a(
+SP_with_trait = add_trait_a(
     key=trait_key,
     sim_param=SP,
-    n_qtl_per_chr=n_qtl_per_chr,
-    mean=trait_means,
-    var=trait_vars,
-    cor_a=trait_cor
+    n_qtl_per_chr=100,
+    mean=jnp.array([10.0]),
+    var=jnp.array([1.5])
 )
 
-print("\n--- Correlated Additive Traits Added ---")
-# The __repr__ for SimParam will now work correctly
-print(f"SimParam object updated: {SP_with_traits}")
-
-# **FIXED**: We now access the single TraitCollection object
-trait_collection = SP_with_traits.traits
-
-# **FIXED**: Inspect the properties of the vectorized TraitCollection
-print(f"Number of traits after: {trait_collection.n_traits}")
-print("\nDetails of the new TraitCollection:")
-print(f"  - Number of shared QTL: {trait_collection.n_loci}")
-print(f"  - Shape of additive effects array: {trait_collection.add_eff.shape}")
-print(f"  - Intercepts for all traits: {trait_collection.intercept}")
-print("-" * 35)
-
-# --- 7. Set Phenotypes for the Founder Population ---
-# This section is MODIFIED to use the new JIT-compatible function signature
+# Set Initial Phenotypes
 key, pheno_key = jax.random.split(key)
-
-h2 = jnp.array([0.5, 0.7])
-cor_e = jnp.array([[1.0, 0.3],
-                   [0.3, 1.0]])
-
-# **FIXED**: Calling the refactored, JIT-compatible set_pheno function.
-# We now pass the TraitCollection object directly.
+h2 = jnp.array([0.9])
 founder_pop_with_pheno = set_pheno(
     key=pheno_key,
     pop=founder_pop,
-    traits=trait_collection,
-    ploidy=SP_with_traits.ploidy, # Pass ploidy from the SimParam object
-    h2=h2,
-    cor_e=cor_e
+    traits=SP_with_trait.traits,
+    ploidy=SP_with_trait.ploidy,
+    h2=h2
 )
-# The first time this runs, JAX will JIT-compile the function.
-# Subsequent calls will be lightning fast! ⚡️
-print("\n--- Phenotypes Calculated for Founder Population (JIT-compiled) ---")
-print(founder_pop_with_pheno)
-print(f"\nPhenotype array shape: {founder_pop_with_pheno.pheno.shape}")
-print("\nExample phenotypes (first 5 individuals):")
-print(founder_pop_with_pheno.pheno[:5, :])
-print("-" * 35)
+
+# --- 8. Burn-in Selection for 20 Generations ---
+print("\n--- Starting Burn-in Phenotypic Selection (20 Generations) ---")
+
+pop_burn_in = founder_pop_with_pheno
+sp_burn_in = SP_with_trait
+
+# Selection parameters
+n_males_select = 10
+n_females_select = 25
+n_progeny = 100
+
+for gen in range(20):
+    key, sel_key, cross_key, update_key = jax.random.split(key, 4)
+
+    # Selection
+    male_indices = jnp.where(pop_burn_in.sex == 0, jnp.arange(pop_burn_in.nInd), pop_burn_in.nInd)
+    female_indices = jnp.where(pop_burn_in.sex == 1, jnp.arange(pop_burn_in.nInd), pop_burn_in.nInd)
+    phenotypes = pop_burn_in.pheno[:, 0]
+    sorted_indices = jnp.argsort(phenotypes)[::-1]
+    top_males = jnp.intersect1d(sorted_indices, male_indices)[:n_males_select]
+    top_females = jnp.intersect1d(sorted_indices, female_indices)[:n_females_select]
+
+    # Mating
+    mother_iids = jax.random.choice(sel_key, top_females, shape=(n_progeny,))
+    key, sel_key = jax.random.split(sel_key)
+    father_iids = jax.random.choice(sel_key, top_males, shape=(n_progeny,))
+    cross_plan = jnp.stack([mother_iids, father_iids], axis=1)
+
+    # Create Next Generation
+    progeny_pop = make_cross(cross_key, pop_burn_in, cross_plan, sp_burn_in)
+    
+    # Update Values for the New Generation using the pipeline function
+    pop_burn_in = update_pop_values(update_key, progeny_pop, sp_burn_in, h2=h2)
+
+    # Track Progress
+    mean_pheno = jnp.mean(pop_burn_in.pheno)
+    print(f"Generation {gen + 1:2d}/{20} | Mean Phenotype: {mean_pheno:.4f}")
+
+print("\n--- Burn-in Complete ---")
+print("Final population state after 20 generations of selection:")
+print(pop_burn_in)
 ```
 
-    WARNING:2025-07-13 10:40:40,642:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
 
-    --- Initial Simulation Parameters Created ---
-    SimParam(nChr=3, nTraits=0, ploidy=2, sexes='no')
-    -----------------------------------
+    --- Starting Burn-in Phenotypic Selection (20 Generations) ---
+    Generation  1/20 | Mean Phenotype: 9.8385
+    Generation  2/20 | Mean Phenotype: 9.9082
+    Generation  3/20 | Mean Phenotype: 9.7989
+    Generation  4/20 | Mean Phenotype: 9.9779
+    Generation  5/20 | Mean Phenotype: 9.6955
+    Generation  6/20 | Mean Phenotype: 9.5632
+    Generation  7/20 | Mean Phenotype: 9.6790
+    Generation  8/20 | Mean Phenotype: 9.7858
+    Generation  9/20 | Mean Phenotype: 9.9831
+    Generation 10/20 | Mean Phenotype: 10.0481
+    Generation 11/20 | Mean Phenotype: 9.9873
+    Generation 12/20 | Mean Phenotype: 9.9383
+    Generation 13/20 | Mean Phenotype: 10.2945
+    Generation 14/20 | Mean Phenotype: 10.4920
+    Generation 15/20 | Mean Phenotype: 10.5587
+    Generation 16/20 | Mean Phenotype: 10.7865
+    Generation 17/20 | Mean Phenotype: 10.6711
+    Generation 18/20 | Mean Phenotype: 10.5779
+    Generation 19/20 | Mean Phenotype: 10.9127
+    Generation 20/20 | Mean Phenotype: 11.0136
 
-    --- Founder Population Created ---
-    Population(nInd=50, nTraits=0, has_ebv=No)
-    Genotype array shape: (50, 3, 2, 100)
-    -----------------------------------
-
-    --- Simulation Parameters Finalized with Founder Pop ---
-    SimParam(nChr=3, nTraits=0, ploidy=2, sexes='no')
-    Number of traits before: 0
-    -----------------------------------
-
-    --- Correlated Additive Traits Added ---
-    SimParam object updated: SimParam(nChr=3, nTraits=2, ploidy=2, sexes='no')
-    Number of traits after: 2
-
-    Details of the new TraitCollection:
-      - Number of shared QTL: 300
-      - Shape of additive effects array: (2, 300)
-      - Intercepts for all traits: [ 9.365508 17.48284 ]
-    -----------------------------------
-
-    --- Phenotypes Calculated for Founder Population (JIT-compiled) ---
-    Population(nInd=50, nTraits=0, has_ebv=No)
-
-    Phenotype array shape: (50, 2)
-
-    Example phenotypes (first 5 individuals):
-    [[ 9.620646 18.488605]
-     [ 7.924078 16.82735 ]
-     [14.140717 22.798744]
-     [10.944615 22.986835]
-     [12.37978  22.679428]]
-    -----------------------------------
+    --- Burn-in Complete ---
+    Final population state after 20 generations of selection:
+    Population(nInd=100, nTraits=0, has_ebv=No)
