@@ -51,62 +51,12 @@ from chewc.population import Population, quick_haplo
 from chewc.trait import TraitCollection, add_trait_a
 from chewc.phenotype import set_pheno
 from chewc.cross import make_cross
-from chewc.pipe import update_pop_values
+from chewc.pipe import update_pop_values, select_and_cross
 
 # --- 🧬 New High-Level Pipeline Functions ---
 
-def select_ind(
-    pop: Population,
-    n_ind: int,
-    use: Union[str, Callable[[Population], jnp.ndarray]] = "pheno",
-    select_top: bool = True
-) -> Population:
-    """Selects the top or bottom individuals from a population."""
-    if isinstance(use, str):
-        selection_values = getattr(pop, use)
-        if selection_values.ndim > 1:
-            selection_values = selection_values[:, 0]  # Default to first trait
-    else:
-        selection_values = use(pop)
-    
-    # Use JAX's efficient top-k selection for performance
-    if not select_top:
-        selection_values = -selection_values
-        
-    _, indices = jax.lax.top_k(selection_values, k=n_ind)
-    
-    # Apply slicing to all array attributes of the Population object
-    # NOTE: This requires that non-array fields (like misc dictionaries) are
-    # marked as static in the flax dataclass for tree_map to work correctly.
-    # For this example, we assume all fields are JAX arrays.
-    return jax.tree_util.tree_map(lambda x: x[indices] if isinstance(x, jnp.ndarray) else x, pop)
 
-def select_and_cross(
-    key: jax.random.PRNGKey,
-    pop: Population,
-    sp: SimParam,
-    n_parents: int,
-    n_crosses: int,
-    use: str = "pheno"
-) -> Population:
-    """Selects parents and performs random crosses to create a new generation."""
-    key_select, key_cross = jax.random.split(key)
-    
-    # 1. Select the best individuals to form the parent pool (sexes ignored)
-    parent_pool = select_ind(pop, n_parents, use=use)
-    
-    # 2. Generate a random cross plan from the selected parent pool
-    # Any parent can be a mother or a father
-    mother_iids = jax.random.choice(key_cross, parent_pool.iid, shape=(n_crosses,))
-    key_cross, _ = jax.random.split(key_cross) # Split key for next choice
-    father_iids = jax.random.choice(key_cross, parent_pool.iid, shape=(n_crosses,))
-    
-    cross_plan = jnp.stack([mother_iids, father_iids], axis=1)
 
-    # 3. Create progeny using the existing low-level function
-    progeny = make_cross(key_cross, pop, cross_plan, sp)
-    
-    return progeny
 
 # --- 1. JAX Setup ---
 key = jax.random.PRNGKey(42)
@@ -187,7 +137,7 @@ print(f"Final population state after {burn_in_generations} generations of select
 print(pop_burn_in)
 ```
 
-    WARNING:2025-07-18 15:11:23,440:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+    WARNING:2025-07-18 15:19:55,059:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
 
 
     --- Starting Burn-in Phenotypic Selection (10 Generations) ---
