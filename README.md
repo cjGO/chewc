@@ -43,6 +43,7 @@ Documentation can be found hosted on this GitHub
 ``` python
 import jax
 import jax.numpy as jnp
+from typing import Callable, Union
 
 # Import the necessary classes and functions from your library
 from chewc.sp import SimParam
@@ -50,7 +51,62 @@ from chewc.population import Population, quick_haplo
 from chewc.trait import TraitCollection, add_trait_a
 from chewc.pheno import set_pheno
 from chewc.cross import make_cross
-from chewc.pipe import update_pop_values # <-- Import from the new module
+from chewc.pipe import update_pop_values
+
+# --- 🧬 New High-Level Pipeline Functions ---
+
+def select_ind(
+    pop: Population,
+    n_ind: int,
+    use: Union[str, Callable[[Population], jnp.ndarray]] = "pheno",
+    select_top: bool = True
+) -> Population:
+    """Selects the top or bottom individuals from a population."""
+    if isinstance(use, str):
+        selection_values = getattr(pop, use)
+        if selection_values.ndim > 1:
+            selection_values = selection_values[:, 0]  # Default to first trait
+    else:
+        selection_values = use(pop)
+    
+    # Use JAX's efficient top-k selection for performance
+    if not select_top:
+        selection_values = -selection_values
+        
+    _, indices = jax.lax.top_k(selection_values, k=n_ind)
+    
+    # Apply slicing to all array attributes of the Population object
+    # NOTE: This requires that non-array fields (like misc dictionaries) are
+    # marked as static in the flax dataclass for tree_map to work correctly.
+    # For this example, we assume all fields are JAX arrays.
+    return jax.tree_util.tree_map(lambda x: x[indices] if isinstance(x, jnp.ndarray) else x, pop)
+
+def select_and_cross(
+    key: jax.random.PRNGKey,
+    pop: Population,
+    sp: SimParam,
+    n_parents: int,
+    n_crosses: int,
+    use: str = "pheno"
+) -> Population:
+    """Selects parents and performs random crosses to create a new generation."""
+    key_select, key_cross = jax.random.split(key)
+    
+    # 1. Select the best individuals to form the parent pool (sexes ignored)
+    parent_pool = select_ind(pop, n_parents, use=use)
+    
+    # 2. Generate a random cross plan from the selected parent pool
+    # Any parent can be a mother or a father
+    mother_iids = jax.random.choice(key_cross, parent_pool.iid, shape=(n_crosses,))
+    key_cross, _ = jax.random.split(key_cross) # Split key for next choice
+    father_iids = jax.random.choice(key_cross, parent_pool.iid, shape=(n_crosses,))
+    
+    cross_plan = jnp.stack([mother_iids, father_iids], axis=1)
+
+    # 3. Create progeny using the existing low-level function
+    progeny = make_cross(key_cross, pop, cross_plan, sp)
+    
+    return progeny
 
 # --- 1. JAX Setup ---
 key = jax.random.PRNGKey(42)
@@ -70,18 +126,22 @@ founder_pop = quick_haplo(key=pop_key, sim_param=SP, n_ind=100, inbred=False)
 SP = SP.replace(founderPop=founder_pop)
 
 # Add Single Additive Trait
+trait_mean = 0
+trait_var = 1
+trait_h2 = .2
+
 key, trait_key = jax.random.split(key)
 SP_with_trait = add_trait_a(
     key=trait_key,
     sim_param=SP,
     n_qtl_per_chr=100,
-    mean=jnp.array([10.0]),
-    var=jnp.array([1.5])
+    mean=jnp.array([trait_mean]),
+    var=jnp.array([trait_var])
 )
 
 # Set Initial Phenotypes
 key, pheno_key = jax.random.split(key)
-h2 = jnp.array([0.9])
+h2 = jnp.array([trait_h2])
 founder_pop_with_pheno = set_pheno(
     key=pheno_key,
     pop=founder_pop,
@@ -90,38 +150,30 @@ founder_pop_with_pheno = set_pheno(
     h2=h2
 )
 
-# --- 8. Burn-in Selection for 20 Generations ---
+# --- 8. Burn-in Selection for 20 Generations (Simplified Loop) ---
 print("\n--- Starting Burn-in Phenotypic Selection (20 Generations) ---")
 
 pop_burn_in = founder_pop_with_pheno
 sp_burn_in = SP_with_trait
 
 # Selection parameters
-n_males_select = 10
-n_females_select = 25
+n_parents_select = 5  # Total number of parents to select
 n_progeny = 100
 
 for gen in range(20):
-    key, sel_key, cross_key, update_key = jax.random.split(key, 4)
+    key, cross_key, update_key = jax.random.split(key, 3)
 
-    # Selection
-    male_indices = jnp.where(pop_burn_in.sex == 0, jnp.arange(pop_burn_in.nInd), pop_burn_in.nInd)
-    female_indices = jnp.where(pop_burn_in.sex == 1, jnp.arange(pop_burn_in.nInd), pop_burn_in.nInd)
-    phenotypes = pop_burn_in.pheno[:, 0]
-    sorted_indices = jnp.argsort(phenotypes)[::-1]
-    top_males = jnp.intersect1d(sorted_indices, male_indices)[:n_males_select]
-    top_females = jnp.intersect1d(sorted_indices, female_indices)[:n_females_select]
-
-    # Mating
-    mother_iids = jax.random.choice(sel_key, top_females, shape=(n_progeny,))
-    key, sel_key = jax.random.split(sel_key)
-    father_iids = jax.random.choice(sel_key, top_males, shape=(n_progeny,))
-    cross_plan = jnp.stack([mother_iids, father_iids], axis=1)
-
-    # Create Next Generation
-    progeny_pop = make_cross(cross_key, pop_burn_in, cross_plan, sp_burn_in)
+    # **SINGLE, HIGH-LEVEL CALL** to handle a full generation
+    progeny_pop = select_and_cross(
+        key=cross_key,
+        pop=pop_burn_in,
+        sp=sp_burn_in,
+        n_parents=n_parents_select,
+        n_crosses=n_progeny,
+        use="pheno" # Select based on phenotype
+    )
     
-    # Update Values for the New Generation using the pipeline function
+    # Update genetic and phenotypic values for the new generation
     pop_burn_in = update_pop_values(update_key, progeny_pop, sp_burn_in, h2=h2)
 
     # Track Progress
@@ -135,26 +187,26 @@ print(pop_burn_in)
 
 
     --- Starting Burn-in Phenotypic Selection (20 Generations) ---
-    Generation  1/20 | Mean Phenotype: 9.8385
-    Generation  2/20 | Mean Phenotype: 9.9082
-    Generation  3/20 | Mean Phenotype: 9.7989
-    Generation  4/20 | Mean Phenotype: 9.9779
-    Generation  5/20 | Mean Phenotype: 9.6955
-    Generation  6/20 | Mean Phenotype: 9.5632
-    Generation  7/20 | Mean Phenotype: 9.6790
-    Generation  8/20 | Mean Phenotype: 9.7858
-    Generation  9/20 | Mean Phenotype: 9.9831
-    Generation 10/20 | Mean Phenotype: 10.0481
-    Generation 11/20 | Mean Phenotype: 9.9873
-    Generation 12/20 | Mean Phenotype: 9.9383
-    Generation 13/20 | Mean Phenotype: 10.2945
-    Generation 14/20 | Mean Phenotype: 10.4920
-    Generation 15/20 | Mean Phenotype: 10.5587
-    Generation 16/20 | Mean Phenotype: 10.7865
-    Generation 17/20 | Mean Phenotype: 10.6711
-    Generation 18/20 | Mean Phenotype: 10.5779
-    Generation 19/20 | Mean Phenotype: 10.9127
-    Generation 20/20 | Mean Phenotype: 11.0136
+    Generation  1/20 | Mean Phenotype: 1.1126
+    Generation  2/20 | Mean Phenotype: 2.0168
+    Generation  3/20 | Mean Phenotype: 2.6536
+    Generation  4/20 | Mean Phenotype: 3.5688
+    Generation  5/20 | Mean Phenotype: 4.5619
+    Generation  6/20 | Mean Phenotype: 5.0159
+    Generation  7/20 | Mean Phenotype: 5.5932
+    Generation  8/20 | Mean Phenotype: 6.0638
+    Generation  9/20 | Mean Phenotype: 6.1357
+    Generation 10/20 | Mean Phenotype: 6.2606
+    Generation 11/20 | Mean Phenotype: 6.3443
+    Generation 12/20 | Mean Phenotype: 6.4400
+    Generation 13/20 | Mean Phenotype: 6.5349
+    Generation 14/20 | Mean Phenotype: 6.6008
+    Generation 15/20 | Mean Phenotype: 6.6359
+    Generation 16/20 | Mean Phenotype: 6.6355
+    Generation 17/20 | Mean Phenotype: 6.6355
+    Generation 18/20 | Mean Phenotype: 6.6355
+    Generation 19/20 | Mean Phenotype: 6.6355
+    Generation 20/20 | Mean Phenotype: 6.6355
 
     --- Burn-in Complete ---
     Final population state after 20 generations of selection:
