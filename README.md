@@ -49,7 +49,7 @@ from typing import Callable, Union
 from chewc.sp import SimParam
 from chewc.population import Population, quick_haplo
 from chewc.trait import TraitCollection, add_trait_a
-from chewc.pheno import set_pheno
+from chewc.phenotype import set_pheno
 from chewc.cross import make_cross
 from chewc.pipe import update_pop_values
 
@@ -128,7 +128,7 @@ SP = SP.replace(founderPop=founder_pop)
 # Add Single Additive Trait
 trait_mean = 0
 trait_var = 1
-trait_h2 = .2
+trait_h2 = .1
 
 key, trait_key = jax.random.split(key)
 SP_with_trait = add_trait_a(
@@ -150,17 +150,19 @@ founder_pop_with_pheno = set_pheno(
     h2=h2
 )
 
-# --- 8. Burn-in Selection for 20 Generations (Simplified Loop) ---
-print("\n--- Starting Burn-in Phenotypic Selection (20 Generations) ---")
 
 pop_burn_in = founder_pop_with_pheno
 sp_burn_in = SP_with_trait
 
 # Selection parameters
 n_parents_select = 5  # Total number of parents to select
-n_progeny = 100
+n_progeny = 1000
+burn_in_generations = 10
 
-for gen in range(20):
+# --- 8. Burn-in Selection for 20 Generations (Simplified Loop) ---
+print(f"\n--- Starting Burn-in Phenotypic Selection ({burn_in_generations} Generations) ---")
+
+for gen in range(burn_in_generations):
     key, cross_key, update_key = jax.random.split(key, 3)
 
     # **SINGLE, HIGH-LEVEL CALL** to handle a full generation
@@ -178,36 +180,28 @@ for gen in range(20):
 
     # Track Progress
     mean_pheno = jnp.mean(pop_burn_in.pheno)
-    print(f"Generation {gen + 1:2d}/{20} | Mean Phenotype: {mean_pheno:.4f}")
+    print(f"Generation {gen + 1:2d}/{burn_in_generations} | Mean Phenotype: {mean_pheno:.4f}")
 
 print("\n--- Burn-in Complete ---")
-print("Final population state after 20 generations of selection:")
+print(f"Final population state after {burn_in_generations} generations of selection:")
 print(pop_burn_in)
 ```
 
+    WARNING:2025-07-18 15:11:23,440:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
 
-    --- Starting Burn-in Phenotypic Selection (20 Generations) ---
-    Generation  1/20 | Mean Phenotype: 1.1126
-    Generation  2/20 | Mean Phenotype: 2.0168
-    Generation  3/20 | Mean Phenotype: 2.6536
-    Generation  4/20 | Mean Phenotype: 3.5688
-    Generation  5/20 | Mean Phenotype: 4.5619
-    Generation  6/20 | Mean Phenotype: 5.0159
-    Generation  7/20 | Mean Phenotype: 5.5932
-    Generation  8/20 | Mean Phenotype: 6.0638
-    Generation  9/20 | Mean Phenotype: 6.1357
-    Generation 10/20 | Mean Phenotype: 6.2606
-    Generation 11/20 | Mean Phenotype: 6.3443
-    Generation 12/20 | Mean Phenotype: 6.4400
-    Generation 13/20 | Mean Phenotype: 6.5349
-    Generation 14/20 | Mean Phenotype: 6.6008
-    Generation 15/20 | Mean Phenotype: 6.6359
-    Generation 16/20 | Mean Phenotype: 6.6355
-    Generation 17/20 | Mean Phenotype: 6.6355
-    Generation 18/20 | Mean Phenotype: 6.6355
-    Generation 19/20 | Mean Phenotype: 6.6355
-    Generation 20/20 | Mean Phenotype: 6.6355
+
+    --- Starting Burn-in Phenotypic Selection (10 Generations) ---
+    Generation  1/10 | Mean Phenotype: 0.4342
+    Generation  2/10 | Mean Phenotype: 2.2197
+    Generation  3/10 | Mean Phenotype: 4.3989
+    Generation  4/10 | Mean Phenotype: 4.8496
+    Generation  5/10 | Mean Phenotype: 5.4339
+    Generation  6/10 | Mean Phenotype: 5.7617
+    Generation  7/10 | Mean Phenotype: 6.2489
+    Generation  8/10 | Mean Phenotype: 6.4915
+    Generation  9/10 | Mean Phenotype: 6.6994
+    Generation 10/10 | Mean Phenotype: 6.8729
 
     --- Burn-in Complete ---
-    Final population state after 20 generations of selection:
-    Population(nInd=100, nTraits=0, has_ebv=No)
+    Final population state after 10 generations of selection:
+    Population(nInd=1000, nTraits=1, has_ebv=No)

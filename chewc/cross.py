@@ -12,7 +12,7 @@ import jax.numpy as jnp
 from .sp import SimParam
 from .population import quick_haplo, Population
 from .trait import add_trait_a, TraitCollection
-from .pheno import set_pheno
+from .phenotype import set_pheno
 from .meiosis import *
 
 

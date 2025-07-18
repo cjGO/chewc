@@ -13,7 +13,7 @@ from typing import Callable, Union
 
 from .population import Population
 from .sp import SimParam
-from .pheno import set_pheno
+from .phenotype import set_pheno
 
 def select_ind(
     pop: Population,
