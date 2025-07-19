@@ -20,6 +20,28 @@ if TYPE_CHECKING:
 class SimParam:
     """
     A container for all global simulation parameters.
+
+    --- JAX JIT Compilation Notes ---
+
+    This class is a JAX Pytree, but it contains a mix of dynamic JAX arrays
+    and static Python-native objects. When an instance of `SimParam` is
+    passed to a JIT-compiled function, the function is compiled specifically
+    for the values of the static attributes.
+
+    - **Dynamic Attributes (Tracable)**: These are `jnp.ndarray`s. Their
+      values can change between function calls without causing re-compilation.
+      Includes: `gen_map`, `centromere`, `founderPop`, `pedigree`, `var_e`.
+
+    - **Static Attributes (Non-Tracable)**: These are all other attributes
+      (`int`, `str`, `bool`, `list`, `tuple`, and custom classes). If any of
+      these attributes change value between calls to a JIT-compiled function,
+      **it will trigger a re-compilation of that function**.
+
+      This is generally desired behavior for simulation parameters, but care
+      must be taken not to modify them inside performance-critical loops.
+      The static attributes are: `ploidy`, `traits`, `snp_chips`, `sexes`,
+      `recomb_params`, `n_threads`, `track_pedigree`, `track_recomb`,
+      `last_id`.
     """
     # --- Core Genome Structure ---
     gen_map: jnp.ndarray

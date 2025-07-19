@@ -16,10 +16,50 @@ import matplotlib.pyplot as plt
 def _sample_chiasmata(key: jax.random.PRNGKey, 
                       map_length: float, 
                       v: float, 
-                      max_crossovers: int = 20) -> jnp.ndarray:
+                      max_crossovers: int = 10) -> jnp.ndarray:
     """
     Generates crossover positions along a single chromosome using a Gamma process
-    to model interference.
+    to model chiasma interference.
+
+    This function is a core component of the meiosis simulation and is designed
+    to be highly efficient on accelerators through JIT compilation.
+
+    --- JAX Implementation Notes ---
+    This function demonstrates several key JAX patterns for handling complex,
+    stateful, and seemingly dynamic processes in a purely functional way.
+
+    1.  **`lax.scan` for Loops**: A standard Python `for` loop cannot be JIT-compiled
+        if its length is not a compile-time constant. `lax.scan` is used here
+        to perform a sequential operation (generating one chiasma after another)
+        in a way that JAX can compile into an efficient, recurrent kernel. It
+        carries state (`key` and `last_pos`) between loop iterations functionally.
+
+    2.  **Static Arguments**: The `max_crossovers` parameter determines the output
+        shape of `lax.scan`. Since all array shapes must be static (known at
+        compile-time), this argument MUST be marked as static using the
+        `@partial(jax.jit, static_argnames=...)` decorator. This tells JAX to
+        re-compile the function if this value changes, which is the desired
+        behavior for simulation parameters.
+
+    3.  **Fixed-Size Output and Masking**: JAX functions must return arrays of a
+        fixed shape. To handle a variable number of crossovers, this function
+        first generates a fixed-size array of potential positions (of length
+        `max_crossovers`). It then uses a boolean mask and `jnp.where` to
+        filter out invalid positions (those outside the chromosome bounds),
+        replacing them with `jnp.nan`. This "generate-and-mask" approach is a
+        standard and highly efficient JAX pattern.
+
+    Args:
+        key: A JAX random key.
+        map_length: The genetic length of the chromosome (e.g., in Morgans).
+        v: The interference parameter from the Gamma distribution (nu).
+        max_crossovers: The maximum number of crossovers to simulate. This
+                        must be a static integer.
+
+    Returns:
+        A fixed-size JAX array of shape (`max_crossovers`,) containing the
+        positions of valid crossovers. Invalid or non-existent crossover
+        slots are filled with `jnp.nan`.
     """
     shape = v
     scale = 1.0 / (2.0 * v)
@@ -47,7 +87,7 @@ def _sample_chiasmata(key: jax.random.PRNGKey,
     return valid_crossovers
 
 
-# %% ../nbs/05_meiosis.ipynb 6
+# %% ../nbs/05_meiosis.ipynb 5
 @partial(jax.jit, static_argnames=("max_crossovers",))
 def _create_gamete(key: jax.random.PRNGKey, 
                    parental_haplotypes: jnp.ndarray,
@@ -55,7 +95,45 @@ def _create_gamete(key: jax.random.PRNGKey,
                    v_interference: float,
                    max_crossovers: int = 20) -> jnp.ndarray:
     """
-    Creates a single recombinant gamete from a parent's two haplotypes.
+    Creates a single recombinant gamete from a parent's two haplotypes for one
+    chromosome.
+
+    --- JAX Implementation Notes ---
+
+    This function is a masterclass in vectorized computation and is the core
+    of the recombination logic. It avoids all Python loops to remain highly
+    performant under JIT compilation.
+
+    1.  **Static Argument Propagation**: This function calls `_sample_chiasmata`,
+        which requires `max_crossovers` to be a static argument. Therefore,
+        this function must also treat `max_crossovers` as static, ensuring
+        a valid call chain for the JIT compiler.
+
+    2.  **Vectorized Recombination via `searchsorted`**: The core of this
+        function is a clever, vectorized method to determine which parental
+        haplotype to use for each locus:
+        a. It first samples a fixed-size array of potential crossover locations.
+        b. `jnp.searchsorted` is used to count how many crossovers have occurred
+           before each locus on the chromosome. This creates an array of "segment
+           indices" (e.g., 0 for the first segment, 1 for the second, etc.).
+        c. Modulo-2 arithmetic (`% 2`) is applied to these segment indices to
+           create a final haplotype choice mask (0 or 1) that alternates at
+           each crossover point.
+
+    3.  **`jnp.where` for Final Selection**: The final gamete is constructed
+        using `jnp.where`, which efficiently selects alleles from one of the two
+        parental haplotypes based on the choice mask generated in the previous
+        step.
+
+    Args:
+        key: A JAX random key.
+        parental_haplotypes: A (2, nLoci) array of the two parental haplotypes.
+        gen_map: A (nLoci,) array of locus positions.
+        v_interference: The interference parameter for chiasma sampling.
+        max_crossovers: A static integer for the maximum number of crossovers.
+
+    Returns:
+        A (nLoci,) array representing the new, recombinant gamete.
     """
     key, chiasma_key, hap_key = jax.random.split(key, 3)
 
@@ -83,27 +161,69 @@ def _create_gamete(key: jax.random.PRNGKey,
     return new_gamete
 
 
-# %% ../nbs/05_meiosis.ipynb 8
+# %% ../nbs/05_meiosis.ipynb 6
 # The signature and decorator are changed to be more specific and JIT-friendly.
 @partial(jax.jit, static_argnames=("n_chr",))
 def meiosis_for_one_cross(key: jax.random.PRNGKey,
-                           mother_geno: jnp.ndarray,
-                           father_geno: jnp.ndarray,
-                           n_chr: int,
-                           gen_map: jnp.ndarray,
-                           v_interference: float
-                          ) -> jnp.ndarray:
+                          mother_geno: jnp.ndarray,
+                          father_geno: jnp.ndarray,
+                          n_chr: int,
+                          gen_map: jnp.ndarray,
+                          v_interference: float
+                         ) -> jnp.ndarray:
     """
-    Creates a single diploid progeny from two parents.
+    Creates a single diploid progeny's genotype from two parents' genotypes
+    by simulating meiosis for all chromosomes in parallel.
+
+    This function is a high-performance kernel designed to be compiled by JAX.
+
+    --- JAX Implementation Notes ---
+    This function showcases the composition of JAX's core transformations for
+    maximum performance on parallel architectures (like GPUs).
+
+    1.  **`vmap` for Parallelism**: The core logic of creating a gamete for a
+        single chromosome is defined in `_create_gamete`. `vmap` is used to
+        automatically "vectorize" this function, applying it across all
+        chromosomes of a parent simultaneously. The `in_axes` argument
+        is critical for this:
+        - `in_axes=(0, 0, 0, None)` tells `vmap` to map over the first axis
+          (the chromosome axis) of the `keys`, `parent_geno`, and `gen_map`
+          arrays, while broadcasting the single `v_interference` value to all
+          parallel executions. This avoids unnecessary memory duplication.
+
+    2.  **`jit` for Fused Compilation**: The entire function is JIT-compiled.
+        JAX is able to "fuse" the `vmap` operations and the final `jnp.stack`
+        into a single, highly-optimized kernel. This minimizes overhead from
+        launching separate computations and maximizes hardware utilization.
+
+    3.  **Static Arguments**: The number of chromosomes, `n_chr`, is used to
+        determine the number of random keys to split via
+        `jax.random.split(key, n_chr)`. Because the shape of a JAX array must
+        be known at compile time, `n_chr` cannot be a dynamic (traced) value.
+        It is therefore marked as a static argument, meaning JAX will
+        re-compile this function if `n_chr` changes.
+
+    Args:
+        key: A JAX random key.
+        mother_geno: The mother's genotype. Shape: `(nChr, ploidy, nLoci)`.
+        father_geno: The father's genotype. Shape: `(nChr, ploidy, nLoci)`.
+        n_chr: The number of chromosomes. **Must be a static integer.**
+        gen_map: The genetic map defining locus positions for each chromosome.
+        v_interference: The interference parameter for the Gamma process.
+
+    Returns:
+        The progeny's complete diploid genotype. Shape: `(nChr, ploidy, nLoci)`.
     """
+
     key_mother, key_father = jax.random.split(key)
-    
-    # vmap now gets its arguments directly
+
+    # Define a vectorized version of the single-chromosome gamete creator.
     vmapped_gamete_creator = vmap(
-        _create_gamete, 
-        in_axes=(0, 0, 0, None)
+        _create_gamete,
+        in_axes=(0, 0, 0, None)  # Map over keys, geno, gen_map; broadcast v
     )
 
+    # Create all of the mother's gamete-haplotypes in parallel
     mother_gametes = vmapped_gamete_creator(
         jax.random.split(key_mother, n_chr),
         mother_geno,
@@ -111,6 +231,7 @@ def meiosis_for_one_cross(key: jax.random.PRNGKey,
         v_interference
     )
 
+    # Create all of the father's gamete-haplotypes in parallel
     father_gametes = vmapped_gamete_creator(
         jax.random.split(key_father, n_chr),
         father_geno,
@@ -118,6 +239,7 @@ def meiosis_for_one_cross(key: jax.random.PRNGKey,
         v_interference
     )
 
+    # Stack the two resulting gametes to form the new diploid genotype
     progeny_geno = jnp.stack([mother_gametes, father_gametes], axis=1)
-    
+
     return progeny_geno

@@ -137,7 +137,7 @@ print(f"Final population state after {burn_in_generations} generations of select
 print(pop_burn_in)
 ```
 
-    WARNING:2025-07-18 15:19:55,059:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+    WARNING:2025-07-19 12:53:52,707:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
 
 
     --- Starting Burn-in Phenotypic Selection (10 Generations) ---

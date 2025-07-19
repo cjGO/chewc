@@ -85,9 +85,9 @@ class Population:
             Shape depends on the specific GxE model.
 
         misc (Dict): A dictionary for storing miscellaneous, non-JAX-critical
-            metadata about individuals.
+            metadata about individuals. Static.
         miscPop (Dict): A dictionary for storing miscellaneous, non-JAX-critical
-            metadata about the entire population.
+            metadata about the entire population. Static.
     """
     # --- Core Genotype Info ---
     geno: jnp.ndarray

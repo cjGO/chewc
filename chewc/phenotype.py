@@ -34,7 +34,21 @@ def _calculate_gvs_vectorized_alternative(
     traits: TraitCollection,
     ploidy: int
 ) -> tuple[Float[Array, "nInd nTraits"], Float[Array, "nInd nTraits"]]: # Return a tuple
-    """Calculates all genetic values using a single matrix multiplication."""
+    """
+    Calculates all genetic values using a single, highly-optimized matrix
+    multiplication. This is a core performance function.
+
+    Args:
+        pop: The Population object.
+        traits: The TraitCollection defining genetic architecture.
+        ploidy: The ploidy of the individuals (e.g., 2 for diploid).
+               **Note**: This must be a static argument for JIT compilation.
+
+    Returns:
+        A tuple containing:
+        - Breeding values (bv) with shape (nInd, nTraits).
+        - Total genetic values (gv) with shape (nInd, nTraits).
+    """
     # Genotype calculation is the same
     flat_geno_alleles = pop.geno.transpose((0, 1, 3, 2)).reshape(pop.nInd, -1, ploidy)
     qtl_alleles = flat_geno_alleles[:, traits.loci_loc, :]
@@ -59,9 +73,11 @@ def _set_pheno_internal(
     h2: Float[Array, "nTraits"],
     cor_e: Optional[Float[Array, "nTraits nTraits"]] = None,
 ) -> Population:
-    """ 
-    Internal, non-JITted function to set phenotypes and true breeding values.
     """
+    Internal, JAX-native logic for setting phenotypes. This function is
+    intended to be JIT-compiled via the `set_pheno` wrapper.
+    """
+
     n_traits = traits.n_traits
     if cor_e is None:
         cor_e = jnp.identity(n_traits)
@@ -94,11 +110,23 @@ def set_pheno(
     cor_e: Optional[Float[Array, "nTraits nTraits"]] = None,
 ) -> Population:
     """
-    JIT-compatible wrapper to set phenotypes.
+    Sets phenotypes for a population based on its genetic values and a
+    specified heritability. This is a high-performance, JIT-compiled function.
 
-    The `ploidy` argument is handled by creating a partially applied
-    function that is then JIT-compiled.
+    --- JAX Implementation Notes ---
+
+    This function serves as a JIT-compatible wrapper for the core logic in
+    `_set_pheno_internal`. The `ploidy` argument, being a standard Python
+    integer that influences array shapes, must be treated as a "static"
+    argument for the JIT compiler.
+
+    We achieve this using `functools.partial`. A new function is created on-the-fly
+    where `ploidy` is a fixed, "baked-in" value. This new function, which only
+    contains JAX-traceable arguments, is then JIT-compiled and executed.
+    This pattern ensures that JAX does not need to re-compile the function
+    unless the value of `ploidy` changes.
     """
+
     # 1. Create a version of the internal function with `ploidy` "baked in"
     jitted_calculator = jax.jit(
         partial(_set_pheno_internal, ploidy=ploidy)
