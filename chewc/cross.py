@@ -6,88 +6,127 @@
 __all__ = ['make_cross']
 
 # %% ../nbs/06_cross.ipynb 4
+# chewc/cross.py
+
 import jax
 from jax import vmap
 import jax.numpy as jnp
+from functools import partial
+
+# Assuming these imports are correctly set up in your project structure
 from .sp import SimParam
-from .population import quick_haplo, Population
-from .trait import add_trait_a, TraitCollection
-from .phenotype import set_pheno
-from .meiosis import *
+from .population import Population
+from .meiosis import meiosis_for_one_cross
 
-
-def make_cross(key: jax.random.PRNGKey, 
-               pop: Population, 
-               cross_plan: jnp.ndarray, 
-               sim_param: SimParam) -> Population:
+@partial(jax.jit, static_argnames=("n_chr",))
+def _make_cross_geno(
+    key: jax.random.PRNGKey,
+    mothers_geno: jnp.ndarray,
+    fathers_geno: jnp.ndarray,
+    n_chr: int,
+    gen_map: jnp.ndarray,
+    recomb_param_v: float
+) -> jnp.ndarray:
     """
-    Creates progeny from a series of planned crosses in a vectorized manner.
+    (Internal JIT-compiled core) Creates progeny genotypes from parent genotypes.
+
+    This function contains only JAX-traceable operations, making it ideal for
+    `jax.jit`. It takes JAX arrays as input and returns a JAX array.
 
     Args:
-        key: A single JAX random key for the entire operation.
-        pop: The parent population.
-        cross_plan: A 2D array of shape (nCrosses, 2) where each row
-                    contains the mother and father iid, respectively.
-        sim_param: The simulation parameters object.
+        key: A JAX random key. A unique key must be provided for each
+             batch of crosses.
+        mothers_geno: Genotypes of the mothers. Shape: (nCrosses, nChr, ploidy, nLoci).
+        fathers_geno: Genotypes of the fathers. Shape: (nCrosses, nChr, ploidy, nLoci).
+        n_chr: The number of chromosomes (static argument).
+        gen_map: The genetic map.
+        recomb_param_v: The 'v' interference parameter for recombination.
 
     Returns:
-        A new Population object containing all the generated progeny.
+        A JAX array of progeny genotypes. Shape: (nCrosses, nChr, ploidy, nLoci).
     """
-    n_crosses = cross_plan.shape[0]
-
-    # 1. Gather the genotypes of all parents in the plan.
-    # The `cross_plan` contains internal IDs (iids), which are perfect for direct indexing.
-    mother_iids = cross_plan[:, 0]
-    father_iids = cross_plan[:, 1]
-    
-    mothers_geno = pop.geno[mother_iids] # Shape: (nCrosses, nChr, ploidy, nLoci)
-    fathers_geno = pop.geno[father_iids] # Shape: (nCrosses, nChr, ploidy, nLoci)
-
-    # 2. Create a vectorized version of our single-cross function.
-    # `in_axes` tells vmap to map over the first axis of the first three arguments
-    # (keys, mothers, fathers) and to treat the subsequent arguments as constant.
+    # Vectorize the single-cross meiosis function to run all crosses in parallel.
+    # `in_axes` maps over the first dimension (the "cross" dimension) of the
+    # keys and parent genotypes, while broadcasting the static parameters.
     vmapped_cross_creator = vmap(
-        meiosis_for_one_cross, 
+        meiosis_for_one_cross,
         in_axes=(0, 0, 0, None, None, None)
     )
 
-    # 3. Generate a unique key for each cross.
+    n_crosses = mothers_geno.shape[0]
     cross_keys = jax.random.split(key, n_crosses)
-    
-    # 4. Execute all crosses in one parallel operation.
+
     progeny_geno = vmapped_cross_creator(
         cross_keys,
         mothers_geno,
         fathers_geno,
-        sim_param.n_chr,
-        sim_param.gen_map,
-        sim_param.recomb_params[0]
+        n_chr,
+        gen_map,
+        recomb_param_v
     )
-    # The resulting shape is (nCrosses, nChr, ploidy, nLoci), which matches
-    # the shape of our population's `geno` attribute.
+    return progeny_geno
 
-    # 5. Create the new Population object for the progeny.
-    # Note: This part runs on the CPU after the main JAX computation is done.
-    # In a real simulation, you would increment last_id from SimParam.
-    new_iids = jnp.arange(n_crosses) 
-    
-    # Get the public-facing IDs from the parent population
-    mother_ids = pop.id[mother_iids]
-    father_ids = pop.id[father_iids]
-    
-    # For simplicity, we create new IDs; in the full library, you'd
-    # manage this globally from SimParam.
-    new_public_ids = jnp.arange(pop.nInd, pop.nInd + n_crosses) 
+
+def make_cross(
+    key: jax.random.PRNGKey,
+    pop: Population,
+    cross_plan: jnp.ndarray,
+    sp: SimParam,
+    next_id_start: int
+) -> Population:
+    """
+    (Public-facing) Creates progeny from a planned series of crosses.
+
+    This function handles the "CPU-side" logic: preparing data from the main
+    Population object, calling the JIT-compiled core `_make_cross_geno`, and
+    then assembling the results into a new Population object with updated metadata.
+
+    Args:
+        key: A single JAX random key.
+        pop: The parent population.
+        cross_plan: A 2D array of shape (nCrosses, 2) with mother/father iids.
+        sp: The simulation parameters.
+        next_id_start: The starting integer for the new individuals' public IDs.
+
+
+    Returns:
+        A new Population object for the progeny.
+    """
+    n_crosses = cross_plan.shape[0]
+    key_geno, key_sex = jax.random.split(key)
+
+    # 1. Prepare JAX arrays for the JIT-compiled function
+    mother_iids = cross_plan[:, 0]
+    father_iids = cross_plan[:, 1]
+    mothers_geno = pop.geno[mother_iids]
+    fathers_geno = pop.geno[father_iids]
+
+    # 2. Call the highly-optimized, JIT-compiled core function
+    progeny_geno = _make_cross_geno(
+        key_geno,
+        mothers_geno,
+        fathers_geno,
+        sp.n_chr,
+        sp.gen_map,
+        sp.recomb_params[0]
+    )
+
+    # 3. Handle CPU-side logic: create new metadata and Population object
+    new_public_ids = jnp.arange(next_id_start, next_id_start + n_crosses)
+    new_iids = jnp.arange(n_crosses) # Internal IDs are always 0-indexed for the new pop
+    mother_public_ids = pop.id[mother_iids]
+    father_public_ids = pop.id[father_iids]
 
     progeny_pop = Population(
         geno=progeny_geno,
         id=new_public_ids,
-        iid=new_iids, 
-        mother=mother_ids,
-        father=father_ids,
-        sex=jax.random.choice(key, jnp.array([0, 1], dtype=jnp.int8), (n_crosses,)), # Placeholder
-        pheno=jnp.zeros((n_crosses, 0)),
-        fixEff=jnp.ones(n_crosses),
+        iid=new_iids,
+        mother=mother_public_ids,
+        father=father_public_ids,
+        sex=jax.random.choice(key_sex, jnp.array([0, 1], dtype=jnp.int8), (n_crosses,)),
+        pheno=jnp.zeros((n_crosses, sp.n_traits)), # Initialize with correct shape
+        fixEff=jnp.zeros(n_crosses, dtype=jnp.float32),
+        bv=jnp.zeros((n_crosses, sp.n_traits)) # Initialize with correct shape
     )
-    
+
     return progeny_pop

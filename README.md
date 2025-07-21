@@ -43,115 +43,147 @@ Documentation can be found hosted on this GitHub
 ``` python
 import jax
 import jax.numpy as jnp
-from typing import Callable, Union
+import time
 
-# Import the necessary classes and functions from your library
+# Import the necessary classes and the NEW JIT-compiled engine
 from chewc.sp import SimParam
 from chewc.population import Population, quick_haplo
-from chewc.trait import TraitCollection, add_trait_a
+from chewc.trait import add_trait_a
 from chewc.phenotype import set_pheno
-from chewc.cross import make_cross
-from chewc.pipe import update_pop_values, select_and_cross
-
-# --- 🧬 New High-Level Pipeline Functions ---
-
-
-
+from chewc.pipe import run_generation # The new, all-in-one JIT engine
+from functools import partial
 
 # --- 1. JAX Setup ---
 key = jax.random.PRNGKey(42)
 
-# --- 2-6. (Setup code remains the same as before) ---
-# Define Genome Blueprint
+# --- 2. Define Genome Blueprint ---
 n_chr, n_loci_per_chr, ploidy = 3, 100, 2
 gen_map = jnp.array([jnp.linspace(0, 1, n_loci_per_chr) for _ in range(n_chr)])
 centromeres = jnp.full(n_chr, 0.5)
 
-# Instantiate SimParam
-SP = SimParam(gen_map=gen_map, centromere=centromeres, ploidy=ploidy)
+# --- 3. Instantiate SimParam ---
+# We no longer need to update SimParam in the loop, so we can call it `sp`
+sp = SimParam(gen_map=gen_map, centromere=centromeres, ploidy=ploidy)
 
-# Create Founder Population
+# --- 4. Create Founder Population ---
 key, pop_key = jax.random.split(key)
-founder_pop = quick_haplo(key=pop_key, sim_param=SP, n_ind=100, inbred=False)
-SP = SP.replace(founderPop=founder_pop)
+founder_pop = quick_haplo(key=pop_key, sim_param=sp, n_ind=100, inbred=False)
+sp = sp.replace(founderPop=founder_pop)
 
-# Add Single Additive Trait
-trait_mean = 0
-trait_var = 1
-trait_h2 = .1
+# --- 5. Add Single Additive Trait ---
+trait_mean = 0.0
+trait_var = 1.0
+trait_h2 = 0.1
 
 key, trait_key = jax.random.split(key)
-SP_with_trait = add_trait_a(
+# All subsequent operations will use this version of SimParam
+sp = add_trait_a(
     key=trait_key,
-    sim_param=SP,
+    sim_param=sp,
     n_qtl_per_chr=100,
     mean=jnp.array([trait_mean]),
     var=jnp.array([trait_var])
 )
 
-# Set Initial Phenotypes
+# --- 6. Set Initial Phenotypes ---
 key, pheno_key = jax.random.split(key)
 h2 = jnp.array([trait_h2])
-founder_pop_with_pheno = set_pheno(
+current_pop = set_pheno(
     key=pheno_key,
     pop=founder_pop,
-    traits=SP_with_trait.traits,
-    ploidy=SP_with_trait.ploidy,
+    traits=sp.traits,
+    ploidy=sp.ploidy,
     h2=h2
 )
 
-
-pop_burn_in = founder_pop_with_pheno
-sp_burn_in = SP_with_trait
-
-# Selection parameters
-n_parents_select = 5  # Total number of parents to select
+# --- 7. Simulation Parameters ---
+n_parents_select = 100   # Total number of parents to select
 n_progeny = 1000
-burn_in_generations = 10
+burn_in_generations = 20
 
-# --- 8. Burn-in Selection for 20 Generations (Simplified Loop) ---
-print(f"\n--- Starting Burn-in Phenotypic Selection ({burn_in_generations} Generations) ---")
+print(f"--- Starting Accelerated Burn-in ({burn_in_generations} Generations) ---")
+print("Compiling the JIT function for the first generation (this may take a moment)...")
 
+# --- 8. Accelerated Burn-in Loop ---
+# This loop now calls the single, JIT-compiled `run_generation` function.
+# The first call will trigger compilation, and subsequent calls will be extremely fast.
+
+start_time = time.time()
 for gen in range(burn_in_generations):
-    key, cross_key, update_key = jax.random.split(key, 3)
+    # Split the key for the next generation. All sub-keys are handled inside run_generation.
+    key, generation_key = jax.random.split(key)
 
-    # **SINGLE, HIGH-LEVEL CALL** to handle a full generation
-    progeny_pop = select_and_cross(
-        key=cross_key,
-        pop=pop_burn_in,
-        sp=sp_burn_in,
+    # **SINGLE, HIGHLY-ACCELERATED CALL**
+    current_pop = run_generation(
+        key=generation_key,
+        pop=current_pop,
+        h2=h2,
         n_parents=n_parents_select,
         n_crosses=n_progeny,
-        use="pheno" # Select based on phenotype
+        # Pass static arguments
+        use_pheno_selection=True,
+        select_top_parents=True,
+        ploidy=sp.ploidy,
+        # Pass static SimParam components
+        gen_map=sp.gen_map,
+        recomb_param_v=sp.recomb_params[0],
+        traits=sp.traits
     )
     
-    # Update genetic and phenotypic values for the new generation
-    pop_burn_in = update_pop_values(update_key, progeny_pop, sp_burn_in, h2=h2)
-
-    # Track Progress
-    mean_pheno = jnp.mean(pop_burn_in.pheno)
+    # Block until the computation is actually finished to get accurate timing and stats.
+    # This is crucial for benchmarking JAX code.
+    mean_pheno = jnp.mean(current_pop.pheno).block_until_ready()
+    
+    if gen == 0:
+        compilation_time = time.time() - start_time
+        print(f"JIT compilation finished in {compilation_time:.2f} seconds.")
+        print("-" * 50)
+        
     print(f"Generation {gen + 1:2d}/{burn_in_generations} | Mean Phenotype: {mean_pheno:.4f}")
 
+end_time = time.time()
+total_time = end_time - start_time
+avg_time_per_gen = (total_time - compilation_time) / (burn_in_generations - 1) if burn_in_generations > 1 else total_time
+
+print("-" * 50)
 print("\n--- Burn-in Complete ---")
-print(f"Final population state after {burn_in_generations} generations of selection:")
-print(pop_burn_in)
+print(f"Total simulation time: {total_time:.4f} seconds.")
+print(f"Average time per generation (after compilation): {avg_time_per_gen * 1000:.4f} ms")
+print(f"\nFinal population state after {burn_in_generations} generations:")
+print(current_pop)
 ```
 
-    WARNING:2025-07-19 12:53:52,707:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+    WARNING:2025-07-21 14:49:06,864:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
 
-
-    --- Starting Burn-in Phenotypic Selection (10 Generations) ---
-    Generation  1/10 | Mean Phenotype: 0.4342
-    Generation  2/10 | Mean Phenotype: 2.2197
-    Generation  3/10 | Mean Phenotype: 4.3989
-    Generation  4/10 | Mean Phenotype: 4.8496
-    Generation  5/10 | Mean Phenotype: 5.4339
-    Generation  6/10 | Mean Phenotype: 5.7617
-    Generation  7/10 | Mean Phenotype: 6.2489
-    Generation  8/10 | Mean Phenotype: 6.4915
-    Generation  9/10 | Mean Phenotype: 6.6994
-    Generation 10/10 | Mean Phenotype: 6.8729
+    --- Starting Accelerated Burn-in (20 Generations) ---
+    Compiling the JIT function for the first generation (this may take a moment)...
+    JIT compilation finished in 4.26 seconds.
+    --------------------------------------------------
+    Generation  1/20 | Mean Phenotype: -0.0178
+    Generation  2/20 | Mean Phenotype: 0.5732
+    Generation  3/20 | Mean Phenotype: 1.1044
+    Generation  4/20 | Mean Phenotype: 1.5740
+    Generation  5/20 | Mean Phenotype: 2.2945
+    Generation  6/20 | Mean Phenotype: 3.1033
+    Generation  7/20 | Mean Phenotype: 3.5431
+    Generation  8/20 | Mean Phenotype: 4.1015
+    Generation  9/20 | Mean Phenotype: 4.5527
+    Generation 10/20 | Mean Phenotype: 5.1959
+    Generation 11/20 | Mean Phenotype: 5.5863
+    Generation 12/20 | Mean Phenotype: 5.9911
+    Generation 13/20 | Mean Phenotype: 6.3606
+    Generation 14/20 | Mean Phenotype: 6.7998
+    Generation 15/20 | Mean Phenotype: 7.2815
+    Generation 16/20 | Mean Phenotype: 7.6483
+    Generation 17/20 | Mean Phenotype: 8.0602
+    Generation 18/20 | Mean Phenotype: 8.2747
+    Generation 19/20 | Mean Phenotype: 8.6603
+    Generation 20/20 | Mean Phenotype: 8.9926
+    --------------------------------------------------
 
     --- Burn-in Complete ---
-    Final population state after 10 generations of selection:
+    Total simulation time: 11.7093 seconds.
+    Average time per generation (after compilation): 392.3327 ms
+
+    Final population state after 20 generations:
     Population(nInd=1000, nTraits=1, has_ebv=No)
