@@ -128,10 +128,10 @@ def run_generation(
     key_select, key_cross_plan, key_cross_geno, key_pheno = jax.random.split(key, 4)
 
     # 1. Select Parents (JIT-compatible)
+    # Corrected code in run_generation
     parent_indices = select_ind(
         pop, n_parents, use_pheno_selection, select_top_parents
     )
-    # Gather parent genotypes and IDs using the selected indices
     parent_pool_geno = pop.geno[parent_indices]
     parent_pool_iids = pop.iid[parent_indices]
 
