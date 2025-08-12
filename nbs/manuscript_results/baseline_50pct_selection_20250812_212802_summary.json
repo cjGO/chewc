@@ -1,0 +1,8 @@
+{
+  "total_episodes": 1,
+  "generations_per_episode": 20,
+  "final_cumulative_gain_mean": 7.970360787585378,
+  "final_cumulative_gain_std": 0.0,
+  "total_genetic_gain_mean": 7.970360787585378,
+  "by_generation": {
+    

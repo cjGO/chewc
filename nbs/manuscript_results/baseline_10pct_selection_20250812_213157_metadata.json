@@ -1,0 +1,15 @@
+{
+  "experiment_name": "baseline_10pct_selection",
+  "timestamp": "2025-08-12T21:31:53.595498",
+  "pop_size": 200,
+  "n_generations": 20,
+  "heritability": 0.5,
+  "trait_mean": 0.0,
+  "trait_var": 1.0,
+  "n_qtl_per_chr": 50,
+  "n_chr": 10,
+  "map_length": 1.0,
+  "fixed_action": 0.1,
+  "seed": 42,
+  "total_episodes": 1
+}
