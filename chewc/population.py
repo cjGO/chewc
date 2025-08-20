@@ -110,6 +110,7 @@ class Population:
     # --- Trait and Value Data ---
     pheno: jnp.ndarray
     fixEff: jnp.ndarray
+    gv: Optional[jnp.ndarray] = None      # Genetic Value (BV + Intercept)
     bv: Optional[jnp.ndarray] = None      # Breeding Value (Additive)
     dd: Optional[jnp.ndarray] = None      # Dominance Deviations
     aa: Optional[jnp.ndarray] = None      # Additive-by-Additive Epistatic Deviations
@@ -144,21 +145,6 @@ class Population:
         if self.ebv is not None:
             assert self.ebv.shape[0] == n_ind, f"EBV array length ({self.ebv.shape[0]}) must match number of individuals ({n_ind})."
 
-    @property
-    def gv(self) -> jnp.ndarray:
-        """
-        The total genetic value, calculated by summing the component effects
-        (bv, dd, aa). Returns a zero array if no components are defined.
-        """
-        if self.bv is None:
-            return jnp.zeros((self.nInd, 0)) # No traits defined
-        
-        total_gv = self.bv
-        if self.dd is not None:
-            total_gv += self.dd
-        if self.aa is not None:
-            total_gv += self.aa
-        return total_gv
 
     @property
     def nInd(self) -> int:

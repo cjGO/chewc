@@ -48,75 +48,120 @@ class TraitCollection:
     def n_loci(self) -> int:
         return self.loci_loc.shape[0]
 
-# --- Helper Functions ---
+# --- Helper Functions (Unchanged) ---
 
 def _calculate_gvs_vectorized_alternative(
     pop: Population,
     traits: TraitCollection,
     ploidy: int
-) -> Float[Array, "nInd nTraits"]:
-    """Calculates all genetic values using a single matrix multiplication."""
+) -> tuple[Float[Array, "nInd nTraits"], Float[Array, "nInd nTraits"]]:
+    """
+    Calculates all genetic values using a single, highly-optimized matrix
+    multiplication.
+    """
     flat_geno_alleles = pop.geno.transpose((0, 1, 3, 2)).reshape(pop.nInd, -1, ploidy)
     qtl_alleles = flat_geno_alleles[:, traits.loci_loc, :]
     qtl_geno = jnp.sum(qtl_alleles, axis=2)
     all_bv = jnp.dot(qtl_geno, traits.add_eff.T)
     all_gvs = all_bv + traits.intercept
-    return all_gvs
+    return all_bv, all_gvs # Important: returns a tuple
 
-# --- Public Trait-Adding Function ---
+
+# --- Public Trait-Adding Function (Refactored) ---
+#| export
+from typing import List, Optional
+
+import jax
+import jax.numpy as jnp
+from flax.struct import dataclass as flax_dataclass
+from jaxtyping import Array, Float, Int, PyTree
+
+# Assuming Population and SimParam are in these locations
+from .population import Population
+from .sp import SimParam
+
+# ... (Other dataclasses and helper functions remain the same) ...
+
+# --- Public Trait-Adding Function (Refactored) ---
 def add_trait_a(
     key: jax.random.PRNGKey,
+    founder_pop: Population,
     sim_param: SimParam,
     n_qtl_per_chr: int,
     mean: Float[Array, "nTraits"],
     var: Float[Array, "nTraits"],
-    cor_a: Optional[Float[Array, "nTraits nTraits"]] = None
+    cor_a: Optional[Float[Array, "nTraits nTraits"]] = None,
+    gamma: bool = False,
+    shape: float = 1.0
 ) -> SimParam:
-    """Adds one or more new additive traits to the simulation parameters."""
+    """
+    Adds one or more new additive traits to the simulation parameters.
+    ... (docstring remains the same) ...
+    """
+    # --- Input Validation ---
+    # Calculate the number of segregating sites available per chromosome.
+    # This assumes all chromosomes have the same number of loci.
+    n_loci_per_chr = sim_param.gen_map.size // sim_param.n_chr
+    if n_qtl_per_chr > n_loci_per_chr:
+        raise ValueError(
+            f"You requested n_qtl_per_chr={n_qtl_per_chr}, but there are only "
+            f"{n_loci_per_chr} segregating loci available per chromosome in the "
+            "founder population."
+        )
+
     n_traits = mean.shape[0]
     assert mean.shape == var.shape, "Mean and variance vectors must have the same shape."
     if cor_a is None:
         cor_a = jnp.identity(n_traits)
 
-    key, sample_key, qtl_key = jax.random.split(key, 3)
+    key, sample_key, qtl_key, sign_key = jax.random.split(key, 4)
 
     n_total_qtl = n_qtl_per_chr * sim_param.n_chr
+    # Note: Assumes gen_map is a flat array of all loci positions
     all_loci_indices = jnp.arange(sim_param.gen_map.size)
     qtl_loc = jax.random.choice(qtl_key, all_loci_indices, shape=(n_total_qtl,), replace=False)
     qtl_loc = jnp.sort(qtl_loc)
 
-    raw_effects = jax.random.normal(sample_key, (n_total_qtl, n_traits))
+    # --- Sample raw QTL effects from Normal or Gamma distribution ---
+    if gamma:
+        # Sample from gamma and randomly apply a sign for a symmetric distribution
+        gamma_effects = jax.random.gamma(sample_key, shape, shape=(n_total_qtl, n_traits))
+        signs = jax.random.choice(sign_key, jnp.array([-1.0, 1.0]), shape=(n_total_qtl, n_traits))
+        raw_effects = gamma_effects * signs
+    else:
+        raw_effects = jax.random.normal(sample_key, (n_total_qtl, n_traits))
+
+    # --- Correlate and Scale Effects (Logic remains the same) ---
     cholesky_matrix = jnp.linalg.cholesky(cor_a)
     correlated_raw_effects = jnp.dot(raw_effects, cholesky_matrix.T)
 
-    all_scaled_effects = []
-    all_intercepts = []
-
-    # Create a temporary TraitCollection to calculate initial variance
     temp_traits = TraitCollection(
         loci_loc=qtl_loc,
-        add_eff=correlated_raw_effects.T, # Transpose to (nTraits, nQtl)
+        add_eff=correlated_raw_effects.T,
         intercept=jnp.zeros(n_traits)
     )
+    # 1. Unpack the tuple returned by the function
+    initial_bvs, initial_gvs = _calculate_gvs_vectorized_alternative(
+        founder_pop, temp_traits, sim_param.ploidy
+    )
     
-    # Calculate initial breeding values and variance on the founder population
-    initial_bvs = _calculate_gvs_vectorized_alternative(sim_param.founderPop, temp_traits, sim_param.ploidy)
-    initial_vars = jnp.var(initial_bvs, axis=0)
+    # 2. Use the gvs to calculate variance (semantically more correct)
+    initial_vars = jnp.var(initial_gvs, axis=0)
 
-    # Vectorized calculation of scaling factors and intercepts
-    scaling_factors = jnp.sqrt(var / (initial_vars + 1e-8))
+    # 3. Use the bvs to calculate the mean (since intercept is added later)
     initial_means = jnp.mean(initial_bvs, axis=0)
+    # --- END OF EDITS ---
+
+    scaling_factors = jnp.sqrt(var / (initial_vars + 1e-8))
     final_intercepts = mean - (initial_means * scaling_factors)
-    
-    # Scale all effects at once using broadcasting
-    final_add_eff = correlated_raw_effects * scaling_factors # (nQtl, nTraits) * (nTraits,)
+
+    final_add_eff = correlated_raw_effects * scaling_factors
 
     trait_collection = TraitCollection(
         loci_loc=qtl_loc,
-        add_eff=final_add_eff.T, # Store as (nTraits, nQtl)
+        add_eff=final_add_eff.T,
         intercept=final_intercepts
     )
 
     return sim_param.replace(traits=trait_collection)
-
 

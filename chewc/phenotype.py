@@ -101,4 +101,4 @@ def set_pheno(
     pheno = noise_adder(key=key, gvs=gvs, var_e=var_e, cor_e=cor_e)
 
     # 5. --- Update Population ---
-    return pop.replace(bv=bvs, pheno=pheno)
+    return pop.replace(bv=bvs, gv=gvs, pheno=pheno)
