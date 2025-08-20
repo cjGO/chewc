@@ -175,6 +175,11 @@ class Population:
         if self.bv is None or self.bv.ndim <= 1:
             return 0
         return self.bv.shape[1]
+    
+    @property
+    def haplo_matrix(self) -> jnp.ndarray:
+        """ returns a haplotype matrix of shape (n_ind*ploidy, n_chr*n_markers)"""
+        return self.geno.transpose(0, 2, 1, 3).reshape(self.geno.shape[0] * self.geno.shape[2], -1)
 
     @property
     def dosage(self) -> jnp.ndarray:
