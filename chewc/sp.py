@@ -10,6 +10,7 @@ import jax.numpy as jnp
 from flax.struct import dataclass as flax_dataclass
 from dataclasses import field
 from typing import List, Optional, TYPE_CHECKING
+from functools import cached_property
 
 # The TYPE_CHECKING block is still essential for static type analysis.
 if TYPE_CHECKING:
@@ -19,43 +20,30 @@ if TYPE_CHECKING:
 @flax_dataclass(frozen=True)
 class SimParam:
     """
-    A container for all global simulation parameters.
+    A container for all global simulation parameters, initialized from a
+    founder population.
 
     --- JAX JIT Compilation Notes ---
 
-    This class is a JAX Pytree, but it contains a mix of dynamic JAX arrays
-    and static Python-native objects. When an instance of `SimParam` is
-    passed to a JIT-compiled function, the function is compiled specifically
-    for the values of the static attributes.
+    This class is a JAX Pytree. Attributes are derived from the founderPop
+    using @cached_property to ensure compatibility with Flax's frozen data
+    structures. When an instance is passed to a JIT-compiled function, the
+    function is compiled specifically for the values of its static attributes.
 
-    - **Dynamic Attributes (Tracable)**: These are `jnp.ndarray`s. Their
-      values can change between function calls without causing re-compilation.
-      Includes: `gen_map`, `centromere`, `founderPop`, `pedigree`, `var_e`.
+    - **Dynamic Attributes (Tracable)**: `jnp.ndarray`s like `gen_map`,
+      `centromere`, `pedigree`, and `var_e`. Their values can change
+      without causing re-compilation.
 
-    - **Static Attributes (Non-Tracable)**: These are all other attributes
-      (`int`, `str`, `bool`, `list`, `tuple`, and custom classes). If any of
-      these attributes change value between calls to a JIT-compiled function,
-      **it will trigger a re-compilation of that function**.
-
-      This is generally desired behavior for simulation parameters, but care
-      must be taken not to modify them inside performance-critical loops.
-      The static attributes are: `ploidy`, `traits`, `snp_chips`, `sexes`,
-      `recomb_params`, `n_threads`, `track_pedigree`, `track_recomb`,
-      `last_id`.
+    - **Static Attributes (Non-Tracable)**: All other types (`int`, `str`,
+      `bool`, custom classes). A change in these values *will* trigger
+      re-compilation. This includes `ploidy`, `traits`, `sexes`, etc.
     """
-    # --- Core Genome Structure ---
-    gen_map: jnp.ndarray
-    centromere: jnp.ndarray
-    ploidy: int
+    # --- Population State Reference (Primary Input) ---
+    founderPop: 'Population'
 
     # --- Genetic Architecture ---
-    # **THE FIX**: Use strings for the type hints to avoid the NameError at runtime.
     traits: Optional['TraitCollection'] = None
     snp_chips: List['LociMap'] = field(default_factory=list)
-
-    # --- Population State Reference ---
-    # This was already correct.
-    founderPop: Optional['Population'] = None
 
     # --- Simulation Control ---
     sexes: str = "no"
@@ -65,29 +53,58 @@ class SimParam:
     # --- Pedigree & History Tracking ---
     track_pedigree: bool = False
     track_recomb: bool = False
-    last_id: int = 0
     pedigree: Optional[jnp.ndarray] = None
 
     # --- Default Phenotyping Parameters ---
     var_e: Optional[jnp.ndarray] = None
 
+    # --- Core Genome Structure (Derived Properties) ---
+    @cached_property
+    def ploidy(self) -> int:
+        """Derives ploidy from the founder population's genotype shape."""
+        return self.founderPop.geno.shape[2]
+
+    @cached_property
+    def gen_map(self) -> jnp.ndarray:
+        """Extracts the genetic map from the founder population's metadata."""
+        if 'genetic_map_cm' not in self.founderPop.miscPop:
+            raise ValueError(
+                "Founder population must have 'genetic_map_cm' in its "
+                "`miscPop` dictionary. Use a function like `msprime_pop` "
+                "to generate it."
+            )
+        return self.founderPop.miscPop['genetic_map_cm']
+
+    @cached_property
+    def centromere(self) -> jnp.ndarray:
+        """Sets a default centromere position for each chromosome."""
+        return jnp.zeros(self.n_chr)
+
+    @cached_property
+    def last_id(self) -> int:
+        """Initializes last_id based on the founder population size."""
+        return self.founderPop.nInd
+
     @property
     def n_chr(self) -> int:
+        """Returns the number of chromosomes."""
         return self.gen_map.shape[0]
 
     @property
     def n_loci_per_chr(self) -> jnp.ndarray:
+        """Returns an array with the number of loci for each chromosome."""
+        # This assumes a uniform number of loci, consistent with current geno shape
         return jnp.full((self.n_chr,), self.gen_map.shape[1])
 
     @property
     def n_traits(self) -> int:
-        """
-        This logic is now correct and relies on the fix above.
-        """
+        """Returns the number of defined traits."""
         if self.traits is None:
             return 0
         return self.traits.n_traits
 
     def __repr__(self) -> str:
+        # Accessing properties like self.n_chr will trigger their calculation
+        # and caching on the first call.
         return (f"SimParam(nChr={self.n_chr}, nTraits={self.n_traits}, "
                 f"ploidy={self.ploidy}, sexes='{self.sexes}')")

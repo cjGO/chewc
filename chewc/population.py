@@ -48,6 +48,8 @@ def _pad_and_stack_arrays(arrays: List[jnp.ndarray], pad_value: float = jnp.nan)
 
 # --- Core Population Structure ---
 
+
+
 @flax_dataclass(frozen=True) # Make the class immutable, a JAX best practice
 class Population:
     """
@@ -161,6 +163,11 @@ class Population:
     def nInd(self) -> int:
         """Returns the number of individuals in the population."""
         return self.geno.shape[0]
+    
+    @property
+    def nChr(self) -> int:
+        """Returns the number of chromosomes in the population."""
+        return self.geno.shape[1]
 
     @property
     def nTraits(self) -> int:
@@ -169,11 +176,31 @@ class Population:
             return 0
         return self.bv.shape[1]
 
+    @property
+    def dosage(self) -> jnp.ndarray:
+        """
+        Calculates the dosage of alternate alleles for each individual.
+
+        The dosage is the sum of alleles across the ploidy dimension, resulting
+        in a 2D matrix where each entry represents the count of the alternate
+        allele at a specific locus for an individual.
+
+        Returns:
+            A JAX array of shape `(nInd, nLoci)`, where nLoci is the total
+            number of loci across all chromosomes.
+        """
+        # Sum over the ploidy axis (axis=2) to get dosage per chromosome
+        # Shape: (nInd, nChr, nLoci_per_chr)
+        dosage_per_chr = jnp.sum(self.geno, axis=2)
+
+        # Reshape to combine the chromosome and loci dimensions
+        # Shape: (nInd, nChr * nLoci_per_chr)
+        return dosage_per_chr.reshape(self.nInd, -1)
+
     def __repr__(self) -> str:
         """Provides a concise representation of the Population object."""
         return (f"Population(nInd={self.nInd}, nTraits={self.nTraits}, "
-                f"has_ebv={'Yes' if self.ebv is not None else 'No'})")
-
+                f"has_ebv={'Yes' if self.ebv is not None else 'No'})")    
 
 # --- Factory Functions ---
 
@@ -235,7 +262,7 @@ def quick_haplo(key: jax.random.PRNGKey, sim_param: 'SimParam', n_ind: int, inbr
 
 
 
-def msprime_pop(key: jax.random.PRNGKey, sim_param: 'SimParam', n_ind: int, n_loci_per_chr: int) -> Population:
+def msprime_pop(key: jax.random.PRNGKey, n_ind: int, n_loci_per_chr: int, n_chr:int, ploidy = 2) -> Population:
     """
     Creates a new founder population using a standard msprime coalescent simulation.
 
@@ -266,10 +293,6 @@ def msprime_pop(key: jax.random.PRNGKey, sim_param: 'SimParam', n_ind: int, n_lo
 
     # Derive a simple integer seed for msprime from the JAX key
     random_seed = int(jnp.sum(key))
-
-    n_chr = sim_param.n_chr
-    ploidy = sim_param.ploidy
-    assert ploidy == 2, "msprime_pop is currently configured for diploid (ploidy=2) simulations only."
 
     if n_ind > num_simulated_individuals:
         raise ValueError(f"Number of founders requested ({n_ind}) cannot exceed the base simulated population size ({num_simulated_individuals}).")
