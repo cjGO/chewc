@@ -73,11 +73,6 @@ class SimParam:
         Returns:
             A new, fully configured SimParam object.
         """
-        if 'genetic_map_cm' in founder_pop.miscPop:
-             raise DeprecationWarning(
-                "Storing the genetic map in `miscPop` is deprecated. "
-                "The map should be passed directly to this constructor."
-            )
 
         return cls(
             gen_map=gen_map,

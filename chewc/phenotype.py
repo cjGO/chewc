@@ -20,117 +20,85 @@ from .trait import TraitCollection, _calculate_gvs_vectorized_alternative # IMPO
 from jaxtyping import Array, Float, Int
 
 
-def _calculate_single_gv(
-    add_eff_slice: Float[Array, "nLoci"],
-    intercept_slice: float,
-    qtl_geno: Int[Array, "nInd nLoci"]
-) -> Float[Array, "nInd"]:
-    """Calculates GV for one trait given its parameters and the shared QTL genotypes."""
-    bv = jnp.dot(qtl_geno, add_eff_slice)
-    return bv + intercept_slice
-
+# This function remains a core, JIT-able utility
 def _calculate_gvs_vectorized_alternative(
     pop: Population,
     traits: TraitCollection,
     ploidy: int
-) -> tuple[Float[Array, "nInd nTraits"], Float[Array, "nInd nTraits"]]: # Return a tuple
+) -> tuple[Float[Array, "nInd nTraits"], Float[Array, "nInd nTraits"]]:
     """
     Calculates all genetic values using a single, highly-optimized matrix
-    multiplication. This is a core performance function.
-
-    Args:
-        pop: The Population object.
-        traits: The TraitCollection defining genetic architecture.
-        ploidy: The ploidy of the individuals (e.g., 2 for diploid).
-               **Note**: This must be a static argument for JIT compilation.
-
-    Returns:
-        A tuple containing:
-        - Breeding values (bv) with shape (nInd, nTraits).
-        - Total genetic values (gv) with shape (nInd, nTraits).
+    multiplication.
     """
-    # Genotype calculation is the same
     flat_geno_alleles = pop.geno.transpose((0, 1, 3, 2)).reshape(pop.nInd, -1, ploidy)
     qtl_alleles = flat_geno_alleles[:, traits.loci_loc, :]
-    qtl_geno = jnp.sum(qtl_alleles, axis=2) # Shape: (nInd, nLoci)
-
-    # A single, highly optimized kernel call
-    all_bv = jnp.dot(qtl_geno, traits.add_eff.T) # Note the transpose on add_eff
-
-    # Add intercepts using broadcasting
+    qtl_geno = jnp.sum(qtl_alleles, axis=2)
+    all_bv = jnp.dot(qtl_geno, traits.add_eff.T)
     all_gvs = all_bv + traits.intercept
+    return all_bv, all_gvs
 
-    return all_bv, all_gvs # Return both bv and gv
-
-
-# # NOTE the jit decorator caused a 'missing fun' error for a static arg so partial used instead
-
-def _set_pheno_internal(
+# NEW: A simplified internal function for just the noise calculation
+def _add_environmental_noise(
     key: jax.random.PRNGKey,
-    pop: Population,
-    traits: TraitCollection,
-    ploidy: int,
-    h2: Float[Array, "nTraits"],
-    cor_e: Optional[Float[Array, "nTraits nTraits"]] = None,
-) -> Population:
+    gvs: Float[Array, "nInd nTraits"],
+    var_e: Float[Array, "nTraits"],
+    cor_e: Float[Array, "nTraits nTraits"],
+) -> Float[Array, "nInd nTraits"]:
     """
-    Internal, JAX-native logic for setting phenotypes. This function is
-    intended to be JIT-compiled via the `set_pheno` wrapper.
+    Internal JIT-able function to generate and add environmental noise.
     """
-
-    n_traits = traits.n_traits
-    if cor_e is None:
-        cor_e = jnp.identity(n_traits)
-
-    # 1. Unpack both breeding values and genetic values
-    bvs, gvs = _calculate_gvs_vectorized_alternative(pop, traits, ploidy)
-
-    # 2. Calculate environmental noise based on genetic variance of gvs
-    var_g = jnp.var(gvs, axis=0)
-    var_e = (var_g / h2) - var_g
+    n_ind, n_traits = gvs.shape
     cov_e = jnp.diag(jnp.sqrt(var_e)) @ cor_e @ jnp.diag(jnp.sqrt(var_e))
     environmental_noise = jax.random.multivariate_normal(
-        key, jnp.zeros(n_traits), cov_e, (pop.nInd,)
+        key, jnp.zeros(n_traits), cov_e, (n_ind,)
     )
-
-    pheno = gvs + environmental_noise
-
-    # 3. Return a new population with both bv and pheno updated
-    return pop.replace(bv=bvs, pheno=pheno)
+    return gvs + environmental_noise
 
 
-
-# This is the new public-facing, JIT-compatible function
+# REFACTORED: The public-facing function now orchestrates the steps
 def set_pheno(
     key: jax.random.PRNGKey,
     pop: Population,
     traits: TraitCollection,
     ploidy: int,
-    h2: Float[Array, "nTraits"],
+    h2: Optional[Float[Array, "nTraits"]] = None,
+    varE: Optional[Float[Array, "nTraits"]] = None,
     cor_e: Optional[Float[Array, "nTraits nTraits"]] = None,
 ) -> Population:
     """
-    Sets phenotypes for a population based on its genetic values and a
-    specified heritability. This is a high-performance, JIT-compiled function.
+    Sets phenotypes for a population based on its genetic values and
+    either a specified heritability (h2) or environmental variance (varE).
 
-    --- JAX Implementation Notes ---
-
-    This function serves as a JIT-compatible wrapper for the core logic in
-    `_set_pheno_internal`. The `ploidy` argument, being a standard Python
-    integer that influences array shapes, must be treated as a "static"
-    argument for the JIT compiler.
-
-    We achieve this using `functools.partial`. A new function is created on-the-fly
-    where `ploidy` is a fixed, "baked-in" value. This new function, which only
-    contains JAX-traceable arguments, is then JIT-compiled and executed.
-    This pattern ensures that JAX does not need to re-compile the function
-    unless the value of `ploidy` changes.
+    Exactly one of `h2` or `varE` must be provided.
     """
+    # 1. --- Input Validation (Python Land) ---
+    if (h2 is None and varE is None) or (h2 is not None and varE is not None):
+        raise ValueError("Exactly one of 'h2' or 'varE' must be provided.")
 
-    # 1. Create a version of the internal function with `ploidy` "baked in"
-    jitted_calculator = jax.jit(
-        partial(_set_pheno_internal, ploidy=ploidy)
+    if cor_e is None:
+        cor_e = jnp.identity(traits.n_traits)
+
+    # 2. --- Core Genetic Calculation (JIT-able) ---
+    # We bake `ploidy` into a partial function and JIT it
+    gvs_calculator = jax.jit(
+        partial(_calculate_gvs_vectorized_alternative, ploidy=ploidy)
     )
+    bvs, gvs = gvs_calculator(pop=pop, traits=traits)
 
-    # 2. Call the new jitted function without the static argument
-    return jitted_calculator(key=key, pop=pop, traits=traits, h2=h2, cor_e=cor_e)
+    # 3. --- Determine Environmental Variance (Python Land) ---
+    # This logic now lives outside any JIT compilation path
+    if h2 is not None:
+        var_g = jnp.var(gvs, axis=0)
+        # Add a small epsilon to prevent division by zero for traits with no variance
+        var_e = (var_g / (h2 + 1e-8)) - var_g
+        var_e = jnp.maximum(0, var_e) # Ensure variance is not negative
+    else: # varE is not None
+        var_e = varE
+
+    # 4. --- Add Environmental Noise (JIT-able) ---
+    # The noise calculator is a pure function, so we can JIT it directly
+    noise_adder = jax.jit(_add_environmental_noise)
+    pheno = noise_adder(key=key, gvs=gvs, var_e=var_e, cor_e=cor_e)
+
+    # 5. --- Update Population ---
+    return pop.replace(bv=bvs, pheno=pheno)
