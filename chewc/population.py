@@ -14,6 +14,7 @@ import jax
 import jax.numpy as jnp
 
 from .sp import SimParam
+from typing import Tuple
 
 import msprime
 import tskit
@@ -267,7 +268,8 @@ def quick_haplo(key: jax.random.PRNGKey, sim_param: 'SimParam', n_ind: int, inbr
 
 
 
-def msprime_pop(key: jax.random.PRNGKey, n_ind: int, n_loci_per_chr: int, n_chr:int, ploidy = 2) -> Population:
+def msprime_pop(key: jax.random.PRNGKey, n_ind: int, n_loci_per_chr: int, n_chr:int, ploidy = 2) -> Tuple[Population, jnp.ndarray]:
+
     """
     Creates a new founder population using a standard msprime coalescent simulation.
 
@@ -360,7 +362,7 @@ def msprime_pop(key: jax.random.PRNGKey, n_ind: int, n_loci_per_chr: int, n_chr:
     key, sex_key = jax.random.split(key)
     sex_array = jax.random.choice(sex_key, jnp.array([0, 1], dtype=jnp.int8), (n_ind,))
 
-    return Population(
+    return (Population(
         geno=geno,
         id=ids,
         iid=ids,
@@ -372,6 +374,8 @@ def msprime_pop(key: jax.random.PRNGKey, n_ind: int, n_loci_per_chr: int, n_chr:
         bv=jnp.zeros((n_ind, 0)),
         dd=None,
         aa=None,
-        miscPop={'genetic_map_cm': jnp.array(genetic_map)} # Store the new genetic map
+    ),
+    jnp.array(genetic_map)
     )
+
 

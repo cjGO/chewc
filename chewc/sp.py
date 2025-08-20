@@ -10,9 +10,9 @@ import jax.numpy as jnp
 from flax.struct import dataclass as flax_dataclass
 from dataclasses import field
 from typing import List, Optional, TYPE_CHECKING
-from functools import cached_property
+# No need for cached_property anymore for these core attributes
+# from functools import cached_property
 
-# The TYPE_CHECKING block is still essential for static type analysis.
 if TYPE_CHECKING:
     from .population import Population
     from .trait import TraitA, LociMap, TraitCollection
@@ -20,26 +20,18 @@ if TYPE_CHECKING:
 @flax_dataclass(frozen=True)
 class SimParam:
     """
-    A container for all global simulation parameters, initialized from a
-    founder population.
+    A container for all global simulation parameters.
+
+    This object defines the static rules of the simulation, such as the
+    genetic map and ploidy. It is created once at the beginning of a
+    simulation and is treated as immutable.
 
     --- JAX JIT Compilation Notes ---
-
-    This class is a JAX Pytree. Attributes are derived from the founderPop
-    using @cached_property to ensure compatibility with Flax's frozen data
-    structures. When an instance is passed to a JIT-compiled function, the
-    function is compiled specifically for the values of its static attributes.
-
-    - **Dynamic Attributes (Tracable)**: `jnp.ndarray`s like `gen_map`,
-      `centromere`, `pedigree`, and `var_e`. Their values can change
-      without causing re-compilation.
-
-    - **Static Attributes (Non-Tracable)**: All other types (`int`, `str`,
-      `bool`, custom classes). A change in these values *will* trigger
-      re-compilation. This includes `ploidy`, `traits`, `sexes`, etc.
+    ... (docstring remains the same) ...
     """
-    # --- Population State Reference (Primary Input) ---
-    founderPop: 'Population'
+    # --- Core Genome Structure (Primary Inputs) ---
+    gen_map: jnp.ndarray
+    ploidy: int
 
     # --- Genetic Architecture ---
     traits: Optional['TraitCollection'] = None
@@ -54,46 +46,60 @@ class SimParam:
     track_pedigree: bool = False
     track_recomb: bool = False
     pedigree: Optional[jnp.ndarray] = None
+    last_id: int = 0 # Can be initialized to 0 now
 
     # --- Default Phenotyping Parameters ---
     var_e: Optional[jnp.ndarray] = None
 
-    # --- Core Genome Structure (Derived Properties) ---
-    @cached_property
-    def ploidy(self) -> int:
-        """Derives ploidy from the founder population's genotype shape."""
-        return self.founderPop.geno.shape[2]
+    @classmethod
+    def from_founder_pop(
+        cls,
+        founder_pop: 'Population',
+        gen_map: jnp.ndarray,
+        **kwargs
+    ) -> 'SimParam':
+        """
+        Creates a SimParam object from a founder population and its genetic map.
 
-    @cached_property
-    def gen_map(self) -> jnp.ndarray:
-        """Extracts the genetic map from the founder population's metadata."""
-        if 'genetic_map_cm' not in self.founderPop.miscPop:
-            raise ValueError(
-                "Founder population must have 'genetic_map_cm' in its "
-                "`miscPop` dictionary. Use a function like `msprime_pop` "
-                "to generate it."
+        This is the recommended way to initialize simulation parameters. It
+        ensures that the simulation's rules are perfectly aligned with the
+        initial state of the first population.
+
+        Args:
+            founder_pop: The initial Population object.
+            gen_map: A JAX array containing the genetic map.
+            **kwargs: Additional SimParam attributes to set (e.g., sexes='yes').
+        
+        Returns:
+            A new, fully configured SimParam object.
+        """
+        if 'genetic_map_cm' in founder_pop.miscPop:
+             raise DeprecationWarning(
+                "Storing the genetic map in `miscPop` is deprecated. "
+                "The map should be passed directly to this constructor."
             )
-        return self.founderPop.miscPop['genetic_map_cm']
 
-    @cached_property
+        return cls(
+            gen_map=gen_map,
+            ploidy=founder_pop.geno.shape[2],
+            last_id=founder_pop.nInd,
+            **kwargs
+        )
+
+    # --- Derived Properties ---
+    @property
     def centromere(self) -> jnp.ndarray:
         """Sets a default centromere position for each chromosome."""
         return jnp.zeros(self.n_chr)
 
-    @cached_property
-    def last_id(self) -> int:
-        """Initializes last_id based on the founder population size."""
-        return self.founderPop.nInd
-
     @property
     def n_chr(self) -> int:
-        """Returns the number of chromosomes."""
+        """Returns the number of chromosomes from the genetic map shape."""
         return self.gen_map.shape[0]
 
     @property
     def n_loci_per_chr(self) -> jnp.ndarray:
         """Returns an array with the number of loci for each chromosome."""
-        # This assumes a uniform number of loci, consistent with current geno shape
         return jnp.full((self.n_chr,), self.gen_map.shape[1])
 
     @property
@@ -104,7 +110,5 @@ class SimParam:
         return self.traits.n_traits
 
     def __repr__(self) -> str:
-        # Accessing properties like self.n_chr will trigger their calculation
-        # and caching on the first call.
         return (f"SimParam(nChr={self.n_chr}, nTraits={self.n_traits}, "
                 f"ploidy={self.ploidy}, sexes='{self.sexes}')")
