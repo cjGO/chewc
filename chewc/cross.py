@@ -5,7 +5,7 @@
 # %% auto 0
 __all__ = ['make_cross']
 
-# %% ../nbs/06_cross.ipynb 4
+# %% ../nbs/06_cross.ipynb 3
 # chewc/cross.py
 
 import jax

@@ -5,7 +5,7 @@
 # %% auto 0
 __all__ = ['Population', 'quick_haplo', 'msprime_pop']
 
-# %% ../nbs/01_population.ipynb 3
+# %% ../nbs/01_population.ipynb 4
 from dataclasses import field
 from typing import List, Optional, Dict, Callable
 
@@ -21,32 +21,9 @@ import tskit
 import numpy as np
 import random
 from collections import defaultdict
-# --- Utility Functions ---
-
-def _pad_and_stack_arrays(arrays: List[jnp.ndarray], pad_value: float = jnp.nan) -> jnp.ndarray:
-    """
-    Pads a list of JAX arrays to a uniform shape and stacks them.
-
-    This function is critical for handling data where entries can have
-    variable lengths, such as genetic maps for different chromosomes. JAX's
-    core transformations (like `vmap` for vectorization) require arrays to have
-    a uniform shape for efficient batching on accelerators (GPU/TPU). This
-    utility converts a Python list of arrays into a single, rectangular
-    JAX array that meets this requirement.
-
-    Using `jnp.nan` as the default `pad_value` is a robust choice for
-    genetic maps, as it's an unambiguous "missing value" marker.
-    """
-    if not arrays:
-        return jnp.array([])
-    max_len = max(arr.shape[0] for arr in arrays)
-    padded_arrays = [
-        jnp.pad(arr, (0, max_len - arr.shape[0]), 'constant', constant_values=pad_value)
-        for arr in arrays
-    ]
-    return jnp.stack(padded_arrays)
 
 
+# %% ../nbs/01_population.ipynb 5
 # --- Core Population Structure ---
 
 
@@ -194,50 +171,63 @@ class Population:
         return (f"Population(nInd={self.nInd}, nTraits={self.nTraits}, "
                 f"has_ebv={'Yes' if self.ebv is not None else 'No'})")    
 
-# --- Factory Functions ---
 
-# NOTE: This function assumes a uniform number of segregating sites across chromosomes,
-def quick_haplo(key: jax.random.PRNGKey, sim_param: 'SimParam', n_ind: int, inbred: bool = False) -> Population:
+# %% ../nbs/01_population.ipynb 7
+def quick_haplo(
+    key: jax.random.PRNGKey, 
+    n_ind: int, 
+    n_chr: int, 
+    n_loci_per_chr: int, 
+    ploidy: int = 2, 
+    inbred: bool = False,
+    chr_len_cm: float = 100.0
+) -> Tuple[Population, jnp.ndarray]:
     """
-    Creates a new population with randomly generated haplotypes, analogous to
-    AlphaSimR's `quickHaplo` function.
+    Creates a new population with random haplotypes and a uniform genetic map.
 
-    The structure of the genome (chromosomes, loci, ploidy) is defined by
-    the provided SimParam object.
+    This function is a self-contained founder population generator, analogous to
+    AlphaSimR's `quickHaplo`. It no longer depends on a SimParam object.
+    Instead, it returns both the Population and the genetic map needed to
+    construct a SimParam object later.
 
     Args:
-        key: A JAX random key. Must be provided by the user to ensure
-             reproducibility.
-        sim_param: A SimParam object that defines the genome structure.
+        key: A JAX random key for reproducibility.
         n_ind: Number of individuals to create.
-        inbred: If True, individuals will be fully inbred (homozygous at all loci).
+        n_chr: Number of chromosomes.
+        n_loci_per_chr: Number of loci on each chromosome.
+        ploidy: The ploidy level of the individuals (default: 2).
+        inbred: If True, individuals will be fully inbred (homozygous).
+        chr_len_cm: The length of each chromosome in centiMorgans for the
+                    generated uniform genetic map (default: 100.0).
 
     Returns:
-        A new Population object with random founder individuals.
+        A tuple containing:
+        - A new Population object with random founder individuals.
+        - A JAX array representing the genetic map, with shape 
+          `(n_chr, n_loci_per_chr)`.
     """
     key, geno_key, sex_key = jax.random.split(key, 3)
-
-    # Get genome parameters from the SimParam object
-    n_chr = sim_param.n_chr
-    # We assume uniform number of loci for this simple factory, matching original quickHaplo
-    seg_sites = sim_param.gen_map.shape[1] 
-    ploidy = sim_param.ploidy
 
     # Generate random haplotypes for all individuals and chromosomes
     # Shape: (nInd, nChr, ploidy, nLoci)
     if inbred:
         # Generate one set of haplotypes and tile it across the ploidy axis
-        base_haplotypes = jax.random.randint(geno_key, (n_ind, n_chr, 1, seg_sites), 0, 2, dtype=jnp.uint8)
+        base_haplotypes = jax.random.randint(geno_key, (n_ind, n_chr, 1, n_loci_per_chr), 0, 2, dtype=jnp.uint8)
         geno = jnp.tile(base_haplotypes, (1, 1, ploidy, 1))
     else:
         # Fully random, outbred individuals
-        geno = jax.random.randint(geno_key, (n_ind, n_chr, ploidy, seg_sites), 0, 2, dtype=jnp.uint8)
+        geno = jax.random.randint(geno_key, (n_ind, n_chr, ploidy, n_loci_per_chr), 0, 2, dtype=jnp.uint8)
 
     # --- Create Pedigree and IDs using JAX arrays ---
     ids = jnp.arange(n_ind)
     sex_array = jax.random.choice(sex_key, jnp.array([0, 1], dtype=jnp.int8), (n_ind,))
 
-    return Population(
+    # --- Generate a uniform genetic map ---
+    # Each chromosome has loci evenly spaced from 0 to chr_len_cm
+    loci_pos = jnp.linspace(0., chr_len_cm, n_loci_per_chr)
+    genetic_map = jnp.tile(loci_pos, (n_chr, 1))
+
+    population = Population(
         geno=geno,
         id=ids,
         iid=ids,  # In a new pop, id and iid are the same
@@ -249,50 +239,67 @@ def quick_haplo(key: jax.random.PRNGKey, sim_param: 'SimParam', n_ind: int, inbr
         bv=jnp.zeros((n_ind, 0)),  # No traits by default
         dd=None,
         aa=None,
-
     )
+    
+    return population, genetic_map
 
+# %% ../nbs/01_population.ipynb 9
+from numpy.random import default_rng
+from typing import Tuple
 
-
-def msprime_pop(key: jax.random.PRNGKey, n_ind: int, n_loci_per_chr: int, n_chr:int, ploidy = 2) -> Tuple[Population, jnp.ndarray]:
-
+def msprime_pop(
+    key: jax.random.PRNGKey,
+    n_ind: int,
+    n_loci_per_chr: int,
+    n_chr: int,
+    ploidy: int = 2,
+    effective_population_size: int = 10_000,
+    mutation_rate: float = 2e-8,
+    recombination_rate_per_chr: float = 2e-8,
+    maf_threshold: float = 0.1,
+    num_simulated_individuals: int = 500,
+    base_chr_length: int = 1_000_000
+) -> Tuple[Population, jnp.ndarray]:
     """
-    Creates a new founder population using a standard msprime coalescent simulation.
+    Creates a new founder population using msprime coalescent simulation.
 
-    This function provides a biologically more realistic alternative to `quick_haplo`
-    by generating genotypes and a genetic map based on population genetics principles
-    (e.g., effective population size, mutation, recombination).
+    Generates genotypes and a genetic map based on population genetics principles.
 
     Args:
-        key: A JAX random key, used to derive a seed for msprime's random number generator.
-        sim_param: A SimParam object that defines the genome structure (ploidy, n_chr).
-                   The chromosome lengths are hardcoded in this version.
-        n_ind: The number of founder individuals to generate and return.
-        n_loci_per_chr: The number of SNPs (loci) to select for each chromosome.
+        key: JAX random key.
+        n_ind: Number of founder individuals to generate.
+        n_loci_per_chr: Number of SNPs (loci) to select per chromosome.
+        n_chr: Number of chromosomes.
+        ploidy: The ploidy level of the individuals (default: 2).
+        effective_population_size: The size of the simulated population.
+        mutation_rate: The mutation rate for the simulation.
+        recombination_rate_per_chr: Recombination rate per chromosome.
+        maf_threshold: Minimum allele frequency threshold for SNPs.
+        num_simulated_individuals: Number of individuals to simulate initially.
+        base_chr_length: Length of each chromosome in base pairs.
 
     Returns:
-        A new Population object containing the simulated founder individuals. The
-        generated genetic map (in cM) is stored in the `miscPop` dictionary.
+        A tuple containing:
+        - A new Population object with random founder individuals.
+        - A JAX array representing the genetic map, with shape 
+          `(n_chr, n_loci_per_chr)`.
     """
-    # --- Hardcoded Simulation Parameters ---
-    # These define the ancestral population from which founders are drawn.
-    num_simulated_individuals = 500
-    effective_population_size = 10_000
-    mutation_rate = 2e-8
-    chromosome_lengths = [1_500_000, 1_000_000, 500_000] # Standard lengths
-    recombination_rate_per_chr = 2e-8
-    maf_threshold = 0.1
-    # --- End of Hardcoded Parameters ---
-
-    # Derive a simple integer seed for msprime from the JAX key
-    random_seed = int(jnp.sum(key))
-
+    # --- Input Validation ---
     if n_ind > num_simulated_individuals:
         raise ValueError(f"Number of founders requested ({n_ind}) cannot exceed the base simulated population size ({num_simulated_individuals}).")
 
+    # --- Derive Seeds ---
+    key, seed_key, sex_key, numpy_seed_key = jax.random.split(key, 4)
+    random_seed = int(jnp.sum(seed_key))
+    numpy_seed = int(jnp.sum(numpy_seed_key))
+    rng = default_rng(numpy_seed)
+
+    # --- Chromosome Lengths ---
+    chromosome_lengths = [base_chr_length] * n_chr
+
     # --- Run msprime Simulation ---
     num_haplotypes = num_simulated_individuals * ploidy
-    
+
     # Create the recombination map for msprime
     rate_map_positions = [0] + list(np.cumsum(chromosome_lengths))
     rate_map_rates = [recombination_rate_per_chr] * len(chromosome_lengths)
@@ -304,7 +311,7 @@ def msprime_pop(key: jax.random.PRNGKey, n_ind: int, n_loci_per_chr: int, n_chr:
     )
     mts = msprime.sim_mutations(ts, rate=mutation_rate, random_seed=random_seed)
 
-    # --- Robust Data Extraction ---
+    # --- Data Extraction ---
     true_num_individuals = mts.num_samples // ploidy
     all_variants = list(mts.variants())
 
@@ -321,34 +328,35 @@ def msprime_pop(key: jax.random.PRNGKey, n_ind: int, n_loci_per_chr: int, n_chr:
             var for var in all_variants
             if chr_start <= var.site.position < chr_end and len(var.alleles) == 2 and min(np.mean(var.genotypes), 1 - np.mean(var.genotypes)) > maf_threshold
         ]
-        
+
         num_found = len(eligible_snps)
         num_to_select = min(num_found, n_loci_per_chr)
-        
+
         if num_to_select > 0:
-            selected_snps = random.sample(eligible_snps, num_to_select)
+            selected_indices = rng.choice(len(eligible_snps), num_to_select, replace=False)
+            selected_snps = [eligible_snps[i] for i in selected_indices]
             selected_snps.sort(key=lambda v: v.site.position)
 
             for snp_idx, snp in enumerate(selected_snps):
                 genotypes_for_snp = snp.genotypes.reshape(true_num_individuals, ploidy)
                 full_haplotype_matrix[:, i, :, snp_idx] = genotypes_for_snp
-            
+
             positions_cm = [(v.site.position - chr_start) * recomb_rate * 100 for v in selected_snps]
             genetic_map[i, :num_to_select] = positions_cm
 
     # --- Sample Founders and Format for Population Object ---
-    founder_indices = np.sort(random.sample(range(true_num_individuals), n_ind))
+    founder_indices = np.sort(rng.choice(true_num_individuals, n_ind, replace=False))
     founder_haplotypes = full_haplotype_matrix[founder_indices, :, :, :]
-    
+
     # Convert to JAX arrays
     geno = jnp.array(founder_haplotypes, dtype=jnp.uint8)
-    
+    gen_map_jax = jnp.array(genetic_map)
+
     # --- Create Pedigree and IDs using JAX arrays ---
     ids = jnp.arange(n_ind)
-    key, sex_key = jax.random.split(key)
     sex_array = jax.random.choice(sex_key, jnp.array([0, 1], dtype=jnp.int8), (n_ind,))
 
-    return (Population(
+    pop = Population(
         geno=geno,
         id=ids,
         iid=ids,
@@ -360,8 +368,7 @@ def msprime_pop(key: jax.random.PRNGKey, n_ind: int, n_loci_per_chr: int, n_chr:
         bv=jnp.zeros((n_ind, 0)),
         dd=None,
         aa=None,
-    ),
-    jnp.array(genetic_map)
+        miscPop={}
     )
 
-
+    return pop, gen_map_jax

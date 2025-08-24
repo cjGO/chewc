@@ -16,7 +16,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 from .population import Population
-from .trait import TraitCollection, _calculate_gvs_vectorized_alternative # IMPORT FIXED
+from .trait import TraitCollection
 from jaxtyping import Array, Float, Int
 
 

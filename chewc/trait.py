@@ -50,7 +50,7 @@ class TraitCollection:
 
 # --- Helper Functions (Unchanged) ---
 
-def _calculate_gvs_vectorized_alternative(
+def _calculate_gvs_vectorized(
     pop: Population,
     traits: TraitCollection,
     ploidy: int
@@ -141,7 +141,7 @@ def add_trait_a(
         intercept=jnp.zeros(n_traits)
     )
     # 1. Unpack the tuple returned by the function
-    initial_bvs, initial_gvs = _calculate_gvs_vectorized_alternative(
+    initial_bvs, initial_gvs = _calculate_gvs_vectorized(
         founder_pop, temp_traits, sim_param.ploidy
     )
     
