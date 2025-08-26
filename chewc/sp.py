@@ -13,10 +13,6 @@ from typing import List, Optional, TYPE_CHECKING
 # No need for cached_property anymore for these core attributes
 # from functools import cached_property
 
-if TYPE_CHECKING:
-    from .population import Population
-    from .trait import TraitA, LociMap, TraitCollection
-
 @flax_dataclass(frozen=True)
 class SimParam:
     """
