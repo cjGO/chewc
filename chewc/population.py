@@ -15,13 +15,17 @@ import jax.numpy as jnp
 
 from .sp import SimParam
 from typing import Tuple
-
+from numpy.random import default_rng
 import msprime
 import tskit
 import numpy as np
 import random
 from collections import defaultdict
 
+#testing
+import jax
+import jax.numpy as jnp
+from fastcore.test import test_eq, test_ne
 
 # %% ../nbs/01_population.ipynb 5
 # --- Core Population Structure ---
@@ -244,9 +248,6 @@ def quick_haplo(
     return population, genetic_map
 
 # %% ../nbs/01_population.ipynb 9
-from numpy.random import default_rng
-from typing import Tuple
-
 def msprime_pop(
     key: jax.random.PRNGKey,
     n_ind: int,

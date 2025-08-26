@@ -64,7 +64,7 @@ def calculate_selection_index(phenotypes, weights):
     """
     return jnp.sum(phenotypes * weights, axis=1)
 
-def run_multitrait_selection(key, founder_pop, sp_with_traits, strategy, n_generations=15):
+def run_multitrait_selection(key, founder_pop, sp_with_traits, strategy, n_generations=25):
     """
     Runs multi-trait selection with different strategies.
     
@@ -99,7 +99,7 @@ def run_multitrait_selection(key, founder_pop, sp_with_traits, strategy, n_gener
     results['resistance_stds'].append(float(jnp.std(resistance_pheno)))
     results['correlation'].append(float(jnp.corrcoef(yield_pheno, resistance_pheno)[0, 1]))
     
-    selection_percent = 0.10  # Select top 10%
+    selection_percent = 0.20  # Select top 10%
     n_parents = int(current_pop.nInd * selection_percent)
     n_crosses_per_gen = current_pop.nInd
     next_id = 10000
@@ -475,7 +475,7 @@ print(f"• Genetic diversity preservation varies significantly by strategy")
 print(f"\nExperiment completed! This demonstrates real-world breeding decisions.")
 ```
 
-    WARNING:2025-08-24 18:20:39,614:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+    WARNING:2025-08-26 12:39:51,102:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
 
     === Multi-Trait Selection Experiment: Yield vs Disease Resistance ===
     Simulating a breeding program with correlated traits representing real-world trade-offs
@@ -489,73 +489,69 @@ print(f"\nExperiment completed! This demonstrates real-world breeding decisions.
     === Running Selection Strategies ===
 
     Running Yield Only: Select only for high yield
-      Final yield: 143.10 (+43.51)
-      Final resistance: 42.12 (+-8.25)
+      Final yield: 138.79 (+39.21)
+      Final resistance: 45.07 (+-5.30)
 
     Running Resistance Only: Select only for disease resistance
-      Final yield: 92.54 (+-7.05)
-      Final resistance: 84.02 (+33.65)
+      Final yield: 86.03 (+-13.56)
+      Final resistance: 83.06 (+32.68)
 
     Running Balanced Index: Economic index favoring yield
-      Final yield: 136.49 (+36.91)
-      Final resistance: 54.45 (+4.08)
+      Final yield: 132.56 (+32.97)
+      Final resistance: 54.25 (+3.87)
 
     Running Equal Index: Equal economic weights
-      Final yield: 126.32 (+26.73)
-      Final resistance: 69.91 (+19.54)
+      Final yield: 127.10 (+27.51)
+      Final resistance: 63.45 (+13.08)
 
     Running Resistance Focus: Economic index favoring resistance
-      Final yield: 114.96 (+15.37)
-      Final resistance: 75.63 (+25.26)
+      Final yield: 110.19 (+10.61)
+      Final resistance: 76.79 (+26.42)
 
     Running Independent Culling: Must meet minimum thresholds for both traits
-      Final yield: 125.72 (+26.14)
-      Final resistance: 68.19 (+17.81)
+      Final yield: 127.41 (+27.82)
+      Final resistance: 64.70 (+14.33)
 
     === Creating Multi-Strategy Comparison ===
 
-    /tmp/ipykernel_265239/2674378637.py:372: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
-      plt.tight_layout()
+    ValueError: x and y must have same first dimension, but have shapes (16,) and (26,)
+    [0;31m---------------------------------------------------------------------------[0m
+    [0;31mValueError[0m                                Traceback (most recent call last)
+    Cell [0;32mIn[2], line 278[0m
+    [1;32m    276[0m ax1 [38;5;241m=[39m fig[38;5;241m.[39madd_subplot(gs[[38;5;241m0[39m, [38;5;241m0[39m])
+    [1;32m    277[0m [38;5;28;01mfor[39;00m i, (strategy_name, results) [38;5;129;01min[39;00m [38;5;28menumerate[39m(all_results[38;5;241m.[39mitems()):
+    [0;32m--> 278[0m     [43max1[49m[38;5;241;43m.[39;49m[43mplot[49m[43m([49m[43mgenerations[49m[43m,[49m[43m [49m[43mresults[49m[43m[[49m[38;5;124;43m'[39;49m[38;5;124;43myield_means[39;49m[38;5;124;43m'[39;49m[43m][49m[43m,[49m[43m [49m[38;5;124;43m'[39;49m[38;5;124;43mo-[39;49m[38;5;124;43m'[39;49m[43m,[49m[43m [49m
+    [1;32m    279[0m [43m             [49m[43mcolor[49m[38;5;241;43m=[39;49m[43mcolors[49m[43m[[49m[43mi[49m[43m][49m[43m,[49m[43m [49m[43mlinewidth[49m[38;5;241;43m=[39;49m[38;5;241;43m2[39;49m[43m,[49m[43m [49m[43mmarkersize[49m[38;5;241;43m=[39;49m[38;5;241;43m4[39;49m[43m,[49m[43m [49m[43mlabel[49m[38;5;241;43m=[39;49m[43mstrategy_name[49m[43m)[49m
+    [1;32m    281[0m ax1[38;5;241m.[39mset_xlabel([38;5;124m'[39m[38;5;124mGeneration[39m[38;5;124m'[39m)
+    [1;32m    282[0m ax1[38;5;241m.[39mset_ylabel([38;5;124m'[39m[38;5;124mMean Yield[39m[38;5;124m'[39m)
+
+    File [0;32m~/.local/lib/python3.10/site-packages/matplotlib/axes/_axes.py:1779[0m, in [0;36mAxes.plot[0;34m(self, scalex, scaley, data, *args, **kwargs)[0m
+    [1;32m   1536[0m [38;5;250m[39m[38;5;124;03m"""[39;00m
+    [1;32m   1537[0m [38;5;124;03mPlot y versus x as lines and/or markers.[39;00m
+    [1;32m   1538[0m 
+    [0;32m   (...)[0m
+    [1;32m   1776[0m [38;5;124;03m(``'green'``) or hex strings (``'#008000'``).[39;00m
+    [1;32m   1777[0m [38;5;124;03m"""[39;00m
+    [1;32m   1778[0m kwargs [38;5;241m=[39m cbook[38;5;241m.[39mnormalize_kwargs(kwargs, mlines[38;5;241m.[39mLine2D)
+    [0;32m-> 1779[0m lines [38;5;241m=[39m [[38;5;241m*[39m[38;5;28mself[39m[38;5;241m.[39m_get_lines([38;5;28mself[39m, [38;5;241m*[39margs, data[38;5;241m=[39mdata, [38;5;241m*[39m[38;5;241m*[39mkwargs)]
+    [1;32m   1780[0m [38;5;28;01mfor[39;00m line [38;5;129;01min[39;00m lines:
+    [1;32m   1781[0m     [38;5;28mself[39m[38;5;241m.[39madd_line(line)
+
+    File [0;32m~/.local/lib/python3.10/site-packages/matplotlib/axes/_base.py:296[0m, in [0;36m_process_plot_var_args.__call__[0;34m(self, axes, data, *args, **kwargs)[0m
+    [1;32m    294[0m     this [38;5;241m+[39m[38;5;241m=[39m args[[38;5;241m0[39m],
+    [1;32m    295[0m     args [38;5;241m=[39m args[[38;5;241m1[39m:]
+    [0;32m--> 296[0m [38;5;28;01myield from[39;00m [38;5;28;43mself[39;49m[38;5;241;43m.[39;49m[43m_plot_args[49m[43m([49m
+    [1;32m    297[0m [43m    [49m[43maxes[49m[43m,[49m[43m [49m[43mthis[49m[43m,[49m[43m [49m[43mkwargs[49m[43m,[49m[43m [49m[43mambiguous_fmt_datakey[49m[38;5;241;43m=[39;49m[43mambiguous_fmt_datakey[49m[43m)[49m
+
+    File [0;32m~/.local/lib/python3.10/site-packages/matplotlib/axes/_base.py:486[0m, in [0;36m_process_plot_var_args._plot_args[0;34m(self, axes, tup, kwargs, return_kwargs, ambiguous_fmt_datakey)[0m
+    [1;32m    483[0m     axes[38;5;241m.[39myaxis[38;5;241m.[39mupdate_units(y)
+    [1;32m    485[0m [38;5;28;01mif[39;00m x[38;5;241m.[39mshape[[38;5;241m0[39m] [38;5;241m!=[39m y[38;5;241m.[39mshape[[38;5;241m0[39m]:
+    [0;32m--> 486[0m     [38;5;28;01mraise[39;00m [38;5;167;01mValueError[39;00m([38;5;124mf[39m[38;5;124m"[39m[38;5;124mx and y must have same first dimension, but [39m[38;5;124m"[39m
+    [1;32m    487[0m                      [38;5;124mf[39m[38;5;124m"[39m[38;5;124mhave shapes [39m[38;5;132;01m{[39;00mx[38;5;241m.[39mshape[38;5;132;01m}[39;00m[38;5;124m and [39m[38;5;132;01m{[39;00my[38;5;241m.[39mshape[38;5;132;01m}[39;00m[38;5;124m"[39m)
+    [1;32m    488[0m [38;5;28;01mif[39;00m x[38;5;241m.[39mndim [38;5;241m>[39m [38;5;241m2[39m [38;5;129;01mor[39;00m y[38;5;241m.[39mndim [38;5;241m>[39m [38;5;241m2[39m:
+    [1;32m    489[0m     [38;5;28;01mraise[39;00m [38;5;167;01mValueError[39;00m([38;5;124mf[39m[38;5;124m"[39m[38;5;124mx and y can be no greater than 2D, but have [39m[38;5;124m"[39m
+    [1;32m    490[0m                      [38;5;124mf[39m[38;5;124m"[39m[38;5;124mshapes [39m[38;5;132;01m{[39;00mx[38;5;241m.[39mshape[38;5;132;01m}[39;00m[38;5;124m and [39m[38;5;132;01m{[39;00my[38;5;241m.[39mshape[38;5;132;01m}[39;00m[38;5;124m"[39m)
+
+    [0;31mValueError[0m: x and y must have same first dimension, but have shapes (16,) and (26,)
 
 ![](index_files/figure-commonmark/cell-2-output-4.png)
-
-
-    ================================================================================
-    MULTI-TRAIT BREEDING EXPERIMENT RESULTS
-    ================================================================================
-
-    Trait Characteristics:
-    • Yield: h² = 0.4, Initial mean = 99.6
-    • Disease Resistance: h² = 0.6, Initial mean = 50.4
-    • Genetic Correlation: -0.3 (negative trade-off)
-
-    Final Results After 15 Generations:
-    Strategy            | Yield Gain | Resistance Gain | Total Index* | Diversity Loss
-    -------------------------------------------------------------------------------------
-    Yield Only           |      43.51 |           -8.25 |       22.81 |         8.95
-    Resistance Only      |      -7.05 |           33.65 |        9.23 |        10.59
-    Balanced Index       |      36.91 |            4.08 |       23.78 |         8.08
-    Equal Index          |      26.73 |           19.54 |       23.85 |         7.45
-    Resistance Focus     |      15.37 |           25.26 |       19.33 |         7.39
-    Independent Culling  |      26.14 |           17.81 |       22.81 |         6.19
-
-    *Total Index = 0.6×Yield_gain + 0.4×Resistance_gain (economic weights)
-
-    ============================================================
-    BREEDING RECOMMENDATIONS
-    ============================================================
-    🌾 For Maximum Yield: Yield Only
-       Achieved 43.51 yield gain
-    🛡️  For Maximum Disease Resistance: Resistance Only
-       Achieved 33.65 resistance gain
-    ⚖️  For Balanced Improvement: Equal Index
-       Best economic return with balanced trait improvement
-
-    💡 Key Insights:
-    • Negative correlation creates trade-offs requiring strategic decisions
-    • Single-trait selection maximizes gains in target trait but may sacrifice the other
-    • Selection indices allow optimization of multiple traits simultaneously
-    • Independent culling ensures minimum standards but may limit genetic gains
-    • Genetic diversity preservation varies significantly by strategy
-
-    Experiment completed! This demonstrates real-world breeding decisions.

@@ -5,13 +5,29 @@
 # %% auto 0
 __all__ = ['meiosis_for_one_cross']
 
-# %% ../nbs/05_meiosis.ipynb 4
+# %% ../nbs/05_meiosis.ipynb 3
 import jax
 import jax.numpy as jnp
+from .sp import SimParam
+from .population import quick_haplo, Population
+from .trait import add_trait_a, TraitCollection
+from .phenotype import set_pheno
+
+# --- Imports for Testing ---
+from fastcore.test import test_eq, test_close, test_fail
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+# --- Functions from other modules needed for testing ---
+from .population import Population, quick_haplo
+from .sp import SimParam
+
 from jax import lax, vmap
 from functools import partial
 import matplotlib.pyplot as plt
 
+# %% ../nbs/05_meiosis.ipynb 4
 @partial(jax.jit, static_argnames=("max_crossovers",))
 def _sample_chiasmata(key: jax.random.PRNGKey, 
                       map_length: float, 

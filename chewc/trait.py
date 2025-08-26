@@ -6,6 +6,14 @@
 __all__ = ['LociMap', 'TraitA', 'TraitCollection', 'add_trait_a']
 
 # %% ../nbs/03_trait.ipynb 3
+from fastcore.test import test_eq, test_close, test_fail
+import jax
+import jax.numpy as jnp
+
+# Import functions and classes from other modules needed for testing
+from .population import quick_haplo
+from .sp import SimParam
+
 from typing import List, Optional
 
 import jax
@@ -17,6 +25,7 @@ from jaxtyping import Array, Float, Int, PyTree
 from .population import Population
 from .sp import SimParam
 
+# %% ../nbs/03_trait.ipynb 4
 # --- Base Loci and Trait Structures ---
 
 @flax_dataclass(frozen=True)

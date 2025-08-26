@@ -6,8 +6,6 @@
 __all__ = ['set_pheno']
 
 # %% ../nbs/04_phenotype.ipynb 3
-# chewc/phenotype.py
-
 from typing import Optional
 from functools import partial
 
@@ -17,7 +15,22 @@ from jaxtyping import Array, Float
 
 from .population import Population
 from .trait import TraitCollection
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Float
+
+
+# --- Imports for Testing ---
+from fastcore.test import test_eq, test_close, test_fail
+import jax
+import jax.numpy as jnp
+
+# --- Functions from other modules needed for testing ---
+from .population import quick_haplo
+from .sp import SimParam
+from .trait import add_trait_a, _calculate_gvs_vectorized
+
+# %% ../nbs/04_phenotype.ipynb 4
+# chewc/phenotype.py
+
 
 
 # This function remains a core, JIT-able utility
