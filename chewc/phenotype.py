@@ -32,7 +32,6 @@ from .trait import add_trait_a, _calculate_gvs_vectorized
 # chewc/phenotype.py
 
 
-
 # This function remains a core, JIT-able utility
 def _calculate_gvs_vectorized_alternative(
     pop: Population,
@@ -50,7 +49,9 @@ def _calculate_gvs_vectorized_alternative(
     all_gvs = all_bv + traits.intercept
     return all_bv, all_gvs
 
-# NEW: A simplified internal function for just the noise calculation
+
+
+# %% ../nbs/04_phenotype.ipynb 5
 def _add_environmental_noise(
     key: jax.random.PRNGKey,
     gvs: Float[Array, "nInd nTraits"],
@@ -68,7 +69,8 @@ def _add_environmental_noise(
     return gvs + environmental_noise
 
 
-# REFACTORED: The public-facing function now orchestrates the steps
+
+# %% ../nbs/04_phenotype.ipynb 6
 def set_pheno(
     key: jax.random.PRNGKey,
     pop: Population,

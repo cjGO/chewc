@@ -6,8 +6,6 @@
 __all__ = ['make_cross']
 
 # %% ../nbs/06_cross.ipynb 3
-# chewc/cross.py
-
 import jax
 from jax import vmap
 import jax.numpy as jnp
@@ -17,6 +15,10 @@ from functools import partial
 from .sp import SimParam
 from .population import Population
 from .meiosis import meiosis_for_one_cross
+
+# %% ../nbs/06_cross.ipynb 4
+# chewc/cross.py
+
 
 @partial(jax.jit, static_argnames=("n_chr",))
 def _make_cross_geno(
@@ -67,6 +69,8 @@ def _make_cross_geno(
     return progeny_geno
 
 
+
+# %% ../nbs/06_cross.ipynb 5
 def make_cross(
     key: jax.random.PRNGKey,
     pop: Population,
