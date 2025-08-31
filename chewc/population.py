@@ -254,17 +254,18 @@ def msprime_pop(
     n_loci_per_chr: int,
     n_chr: int,
     ploidy: int = 2,
-    effective_population_size: int = 10_000,
+    effective_population_size: int = 1_000,  # Reduced default from 10_000
     mutation_rate: float = 2e-8,
     recombination_rate_per_chr: float = 2e-8,
     maf_threshold: float = 0.1,
-    num_simulated_individuals: int = 500,
+    num_simulated_individuals: int = None,  # Now calculated dynamically
     base_chr_length: int = 1_000_000
 ) -> Tuple[Population, jnp.ndarray]:
     """
     Creates a new founder population using msprime coalescent simulation.
 
     Generates genotypes and a genetic map based on population genetics principles.
+    Updated with improved parameter validation and more reasonable defaults.
 
     Args:
         key: JAX random key.
@@ -272,11 +273,14 @@ def msprime_pop(
         n_loci_per_chr: Number of SNPs (loci) to select per chromosome.
         n_chr: Number of chromosomes.
         ploidy: The ploidy level of the individuals (default: 2).
-        effective_population_size: The size of the simulated population.
+        effective_population_size: The effective population size for simulation.
+            Reduced default to 1,000 for better performance and memory usage.
+            Larger values (>50,000) may cause memory issues.
         mutation_rate: The mutation rate for the simulation.
         recombination_rate_per_chr: Recombination rate per chromosome.
         maf_threshold: Minimum allele frequency threshold for SNPs.
         num_simulated_individuals: Number of individuals to simulate initially.
+            If None, will be set to max(n_ind * 2, 1000) for better variant diversity.
         base_chr_length: Length of each chromosome in base pairs.
 
     Returns:
@@ -284,10 +288,53 @@ def msprime_pop(
         - A new Population object with random founder individuals.
         - A JAX array representing the genetic map, with shape 
           `(n_chr, n_loci_per_chr)`.
+
+    Raises:
+        ValueError: If parameters are invalid or likely to cause memory issues.
     """
-    # --- Input Validation ---
+    # --- Parameter Validation ---
+    if effective_population_size > 100_000:
+        raise ValueError(
+            f"Effective population size {effective_population_size} is too large and may cause "
+            f"memory issues. Consider using values <= 50,000. For very large populations, "
+            f"consider using quick_haplo() instead."
+        )
+    
+    if effective_population_size < 10:
+        raise ValueError(
+            f"Effective population size {effective_population_size} is too small. "
+            f"Use values >= 10 for realistic simulations."
+        )
+    
+    # Set num_simulated_individuals dynamically if not provided
+    if num_simulated_individuals is None:
+        # Ensure we have enough diversity by simulating more individuals than needed
+        # But cap it to avoid memory issues
+        num_simulated_individuals = min(max(n_ind * 2, 1000), 10_000)
+    
     if n_ind > num_simulated_individuals:
-        raise ValueError(f"Number of founders requested ({n_ind}) cannot exceed the base simulated population size ({num_simulated_individuals}).")
+        raise ValueError(
+            f"Number of founders requested ({n_ind}) cannot exceed the base simulated "
+            f"population size ({num_simulated_individuals})."
+        )
+    
+    # Warn if parameters might cause performance issues
+    total_genome_size = n_chr * base_chr_length
+    if total_genome_size > 1e9:  # 1 billion bp
+        import warnings
+        warnings.warn(
+            f"Large total genome size ({total_genome_size} bp) may cause slow simulation. "
+            f"Consider reducing base_chr_length or n_chr for faster performance.",
+            UserWarning
+        )
+    
+    if num_simulated_individuals * ploidy > 50_000:
+        import warnings
+        warnings.warn(
+            f"Large number of haplotypes ({num_simulated_individuals * ploidy}) may cause "
+            f"memory issues. Consider reducing num_simulated_individuals.",
+            UserWarning
+        )
 
     # --- Derive Seeds ---
     key, seed_key, sex_key, numpy_seed_key = jax.random.split(key, 4)
@@ -306,11 +353,26 @@ def msprime_pop(
     rate_map_rates = [recombination_rate_per_chr] * len(chromosome_lengths)
     rate_map = msprime.RateMap(position=rate_map_positions, rate=rate_map_rates)
 
-    ts = msprime.sim_ancestry(
-        samples=num_haplotypes, population_size=effective_population_size,
-        recombination_rate=rate_map, random_seed=random_seed
-    )
-    mts = msprime.sim_mutations(ts, rate=mutation_rate, random_seed=random_seed)
+    try:
+        ts = msprime.sim_ancestry(
+            samples=num_haplotypes, 
+            population_size=effective_population_size,
+            recombination_rate=rate_map, 
+            random_seed=random_seed
+        )
+        mts = msprime.sim_mutations(ts, rate=mutation_rate, random_seed=random_seed)
+    except Exception as e:
+        # Provide helpful error message for common issues
+        if "memory" in str(e).lower() or "malloc" in str(e).lower():
+            raise RuntimeError(
+                f"Memory allocation failed during msprime simulation. This is likely due to "
+                f"too large parameter combination. Try reducing effective_population_size "
+                f"(current: {effective_population_size}), num_simulated_individuals "
+                f"(current: {num_simulated_individuals}), or genome size. "
+                f"Original error: {str(e)}"
+            ) from e
+        else:
+            raise RuntimeError(f"msprime simulation failed: {str(e)}") from e
 
     # --- Data Extraction ---
     true_num_individuals = mts.num_samples // ploidy
@@ -327,7 +389,9 @@ def msprime_pop(
 
         eligible_snps = [
             var for var in all_variants
-            if chr_start <= var.site.position < chr_end and len(var.alleles) == 2 and min(np.mean(var.genotypes), 1 - np.mean(var.genotypes)) > maf_threshold
+            if chr_start <= var.site.position < chr_end 
+            and len(var.alleles) == 2 
+            and min(np.mean(var.genotypes), 1 - np.mean(var.genotypes)) > maf_threshold
         ]
 
         num_found = len(eligible_snps)
@@ -344,6 +408,13 @@ def msprime_pop(
 
             positions_cm = [(v.site.position - chr_start) * recomb_rate * 100 for v in selected_snps]
             genetic_map[i, :num_to_select] = positions_cm
+        elif num_found == 0:
+            import warnings
+            warnings.warn(
+                f"No variants found for chromosome {i} with MAF > {maf_threshold}. "
+                f"Consider lowering maf_threshold or increasing mutation_rate/effective_population_size.",
+                UserWarning
+            )
 
     # --- Sample Founders and Format for Population Object ---
     founder_indices = np.sort(rng.choice(true_num_individuals, n_ind, replace=False))
@@ -369,7 +440,16 @@ def msprime_pop(
         bv=jnp.zeros((n_ind, 0)),
         dd=None,
         aa=None,
-        miscPop={}
+        miscPop={
+            'msprime_params': {
+                'effective_population_size': effective_population_size,
+                'mutation_rate': mutation_rate,
+                'recombination_rate_per_chr': recombination_rate_per_chr,
+                'maf_threshold': maf_threshold,
+                'num_simulated_individuals': num_simulated_individuals,
+                'base_chr_length': base_chr_length
+            }
+        }
     )
 
     return pop, gen_map_jax
