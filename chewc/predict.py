@@ -103,76 +103,92 @@ def _solve_mixed_model_equations(
     C_inv = jnp.linalg.inv(lhs)
     
     return fixed_effects, random_effects, C_inv
+# In chewc/predict.py
 
+# ... (keep the existing _calculate_genomic_relationship_matrix and _solve_mixed_model_equations) ...
 def gblup_predict(
     pop: Population, 
     h2: float = 0.5, 
     trait_idx: int = 0
 ) -> PredictionResults:
     """
-    Perform GBLUP prediction with PEV calculation.
+    Perform GBLUP prediction, correctly handling a mix of individuals with
+    and without phenotypes for model training and prediction.
     
     Args:
-        pop: Population object
-        h2: Heritability
-        trait_idx: Index of trait to predict
+        pop: Population object. Can contain individuals with phenotypes (training set)
+             and individuals with NaN phenotypes (prediction set).
+        h2: Heritability.
+        trait_idx: Index of the trait to predict.
         
     Returns:
-        PredictionResults object with EBVs, PEV, and reliability
+        PredictionResults object with EBVs for ALL individuals.
     """
-    # Get dosage matrix and phenotypes
-    dosage = pop.dosage  # Shape: (nInd, nLoci)
-    pheno = pop.pheno[:, trait_idx:trait_idx+1]  # Shape: (nInd, 1)
+    dosage = pop.dosage
+    pheno = pop.pheno[:, trait_idx:trait_idx+1]
     
-    # Remove individuals with missing phenotypes
-    valid_mask = ~jnp.isnan(pheno.flatten())
+    # Identify training (phenotyped) and prediction (unphenotyped) sets
+    train_mask = ~jnp.isnan(pheno.flatten())
+    pred_mask = jnp.isnan(pheno.flatten())
     
-    if jnp.sum(valid_mask) == 0:
-        raise ValueError("No valid phenotypes found")
+    n_train = jnp.sum(train_mask)
+    n_pred = jnp.sum(pred_mask)
     
-    dosage_valid = dosage[valid_mask]
-    pheno_valid = pheno[valid_mask]
-    valid_ids = pop.id[valid_mask]
+    if n_train == 0:
+        raise ValueError("No valid phenotypes found for model training.")
+
+    # --- Step 1: Calculate the full G-matrix for all individuals ---
+    G_full = _calculate_genomic_relationship_matrix(dosage)
     
-    n_valid = jnp.sum(valid_mask)
+    # --- Step 2: Partition the G-matrix ---
+    # JAX's jnp.ix_ does not support boolean masks.
+    # Convert boolean masks to integer indices first.
+    train_indices = jnp.where(train_mask)[0]
     
-    # Calculate genomic relationship matrix
-    G = _calculate_genomic_relationship_matrix(dosage_valid)
-    G_inv = jnp.linalg.inv(G)
+    # Now use the integer indices to slice the G-matrix.
+    G_train_train = G_full[jnp.ix_(train_indices, train_indices)]
     
-    # Design matrices
-    X = jnp.ones((n_valid, 1))  # Intercept only
-    Z = jnp.identity(n_valid)   # Each individual is its own random effect
+    # --- Step 3: Solve MME for the training set only ---
+    dosage_train = dosage[train_mask] # Direct boolean masking is fine for 1D/2D arrays
+    pheno_train = pheno[train_mask]
     
-    # Variance ratio
+    G_train_inv = jnp.linalg.inv(G_train_train)
+    
+    X_train = jnp.ones((n_train, 1))
+    Z_train = jnp.identity(n_train)
     alpha = (1.0 - h2) / h2
     
-    # Solve mixed model equations
-    fixed_eff, random_eff, C_inv = _solve_mixed_model_equations(
-        X, Z, pheno_valid, G_inv, alpha
+    fixed_eff, ebv_train, C_inv = _solve_mixed_model_equations(
+        X_train, Z_train, pheno_train, G_train_inv, alpha
     )
     
-    # Calculate PEV and reliability
-    var_p = jnp.var(pheno_valid)
+    # --- Step 4: Predict EBVs for the prediction set (if any) ---
+    all_ebv = jnp.zeros((pop.nInd, 1))
+    all_ebv = all_ebv.at[train_mask, 0].set(ebv_train)
+
+    if n_pred > 0:
+        # Convert prediction mask to indices as well for consistency
+        pred_indices = jnp.where(pred_mask)[0]
+        G_pred_train = G_full[jnp.ix_(pred_indices, train_indices)]
+        
+        # The prediction formula: GEBV_pred = G_pred_train @ G_train_inv @ GEBV_train
+        ebv_pred = G_pred_train @ G_train_inv @ ebv_train
+        all_ebv = all_ebv.at[pred_mask, 0].set(ebv_pred)
+
+    # --- Step 5: Calculate PEV and Reliability (for training set only) ---
+    var_p = jnp.var(pheno_train)
     var_a = var_p * h2
     var_e = var_p * (1 - h2)
     
-    # PEV from the coefficient matrix inverse (random effects part)
-    n_fixed = X.shape[1]
+    n_fixed = X_train.shape[1]
     C22_inv = C_inv[n_fixed:, n_fixed:]
-    pev = jnp.diag(C22_inv) * var_e
+    pev_train = jnp.diag(C22_inv) * var_e
+    reliability_train = jnp.maximum(0, 1 - (pev_train / var_a))
     
-    # Reliability
-    reliability = jnp.maximum(0, 1 - (pev / var_a))
-    
-    # Prepare results for all individuals (fill missing with zeros)
-    all_ebv = jnp.zeros((pop.nInd, 1))
     all_pev = jnp.full((pop.nInd,), jnp.nan)
     all_reliability = jnp.full((pop.nInd,), jnp.nan)
-    
-    all_ebv = all_ebv.at[valid_mask, 0].set(random_eff)
-    all_pev = all_pev.at[valid_mask].set(pev)
-    all_reliability = all_reliability.at[valid_mask].set(reliability)
+    all_pev = all_pev.at[train_mask].set(pev_train)
+    all_reliability = all_reliability.at[train_mask].set(reliability_train)
     
     return PredictionResults(
         ids=pop.id,
