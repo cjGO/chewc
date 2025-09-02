@@ -169,6 +169,61 @@ class Population:
         # Reshape to combine the chromosome and loci dimensions
         # Shape: (nInd, nChr * nLoci_per_chr)
         return dosage_per_chr.reshape(self.nInd, -1)
+    
+
+    def plot_maf(self, genetic_map=None, maf_threshold=None):
+        """
+        Plot MAF distribution as a quick sanity check for the population.
+        
+        Args:
+            genetic_map: Optional genetic map to identify valid markers.
+            maf_threshold: Optional MAF threshold to highlight on plot.
+        """
+        import matplotlib.pyplot as plt
+        
+        maf_values = []
+        
+        # Calculate MAF for each marker
+        for chr_idx in range(self.nChr):
+            for snp_idx in range(self.geno.shape[3]):
+                # Skip invalid markers
+                if genetic_map is not None and jnp.isnan(genetic_map[chr_idx, snp_idx]):
+                    continue
+                
+                marker_genotypes = self.geno[:, chr_idx, :, snp_idx]
+                if jnp.any(jnp.isnan(marker_genotypes)):
+                    continue
+                
+                # Calculate MAF
+                allele_freq = float(jnp.mean(marker_genotypes))
+                maf = min(allele_freq, 1 - allele_freq)
+                maf_values.append(maf)
+        
+        if not maf_values:
+            print("No valid markers found!")
+            return
+        
+        # Plot MAF distribution
+        plt.figure(figsize=(8, 5))
+        plt.hist(maf_values, bins=50, alpha=0.7, edgecolor='black')
+        plt.xlabel('Minor Allele Frequency (MAF)')
+        plt.ylabel('Number of Markers')
+        plt.title('MAF Distribution')
+        
+        mean_maf = jnp.mean(jnp.array(maf_values))
+        plt.axvline(mean_maf, color='red', linestyle='--', label=f'Mean: {mean_maf:.3f}')
+        
+        if maf_threshold is not None:
+            plt.axvline(maf_threshold, color='green', linestyle=':', 
+                    label=f'Threshold: {maf_threshold}')
+        
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.show()
+        
+        # Print summary
+        fixed = sum(1 for maf in maf_values if maf == 0)
+        print(f"Markers: {len(maf_values)} | Fixed: {fixed} | Mean MAF: {mean_maf:.3f}")
 
     def __repr__(self) -> str:
         """Provides a concise representation of the Population object."""
@@ -254,12 +309,13 @@ def msprime_pop(
     n_loci_per_chr: int,
     n_chr: int,
     ploidy: int = 2,
-    effective_population_size: int = 1_000,  # Reduced default from 10_000
+    effective_population_size: int = 10_000,
     mutation_rate: float = 2e-8,
     recombination_rate_per_chr: float = 2e-8,
     maf_threshold: float = 0.1,
-    num_simulated_individuals: int = None,  # Now calculated dynamically
-    base_chr_length: int = 1_000_000
+    num_simulated_individuals: int = None,
+    base_chr_length: int = 1_000_000,
+    enforce_founder_maf: bool = True  # NEW PARAMETER
 ) -> Tuple[Population, jnp.ndarray]:
     """
     Creates a new founder population using msprime coalescent simulation.
@@ -274,14 +330,15 @@ def msprime_pop(
         n_chr: Number of chromosomes.
         ploidy: The ploidy level of the individuals (default: 2).
         effective_population_size: The effective population size for simulation.
-            Reduced default to 1,000 for better performance and memory usage.
-            Larger values (>50,000) may cause memory issues.
         mutation_rate: The mutation rate for the simulation.
         recombination_rate_per_chr: Recombination rate per chromosome.
         maf_threshold: Minimum allele frequency threshold for SNPs.
         num_simulated_individuals: Number of individuals to simulate initially.
             If None, will be set to max(n_ind * 2, 1000) for better variant diversity.
         base_chr_length: Length of each chromosome in base pairs.
+        enforce_founder_maf: If True, ensures MAF threshold is met in the final
+            founder population. If False, applies MAF filter to the full simulated
+            population (original behavior).
 
     Returns:
         A tuple containing:
@@ -308,9 +365,9 @@ def msprime_pop(
     
     # Set num_simulated_individuals dynamically if not provided
     if num_simulated_individuals is None:
-        # Ensure we have enough diversity by simulating more individuals than needed
-        # But cap it to avoid memory issues
-        num_simulated_individuals = min(max(n_ind * 2, 1000), 10_000)
+        # If enforcing founder MAF, we need more individuals to ensure diversity
+        multiplier = 5 if enforce_founder_maf else 2
+        num_simulated_individuals = min(max(n_ind * multiplier, 1000), 10_000)
     
     if n_ind > num_simulated_individuals:
         raise ValueError(
@@ -318,21 +375,13 @@ def msprime_pop(
             f"population size ({num_simulated_individuals})."
         )
     
-    # Warn if parameters might cause performance issues
-    total_genome_size = n_chr * base_chr_length
-    if total_genome_size > 1e9:  # 1 billion bp
+    # Additional warning for founder MAF enforcement
+    if enforce_founder_maf and n_ind < 20:
         import warnings
         warnings.warn(
-            f"Large total genome size ({total_genome_size} bp) may cause slow simulation. "
-            f"Consider reducing base_chr_length or n_chr for faster performance.",
-            UserWarning
-        )
-    
-    if num_simulated_individuals * ploidy > 50_000:
-        import warnings
-        warnings.warn(
-            f"Large number of haplotypes ({num_simulated_individuals * ploidy}) may cause "
-            f"memory issues. Consider reducing num_simulated_individuals.",
+            f"Small founder population size ({n_ind}) with enforce_founder_maf=True "
+            f"may result in few usable markers. Consider increasing n_ind or setting "
+            f"enforce_founder_maf=False.",
             UserWarning
         )
 
@@ -362,7 +411,6 @@ def msprime_pop(
         )
         mts = msprime.sim_mutations(ts, rate=mutation_rate, random_seed=random_seed)
     except Exception as e:
-        # Provide helpful error message for common issues
         if "memory" in str(e).lower() or "malloc" in str(e).lower():
             raise RuntimeError(
                 f"Memory allocation failed during msprime simulation. This is likely due to "
@@ -374,25 +422,42 @@ def msprime_pop(
         else:
             raise RuntimeError(f"msprime simulation failed: {str(e)}") from e
 
-    # --- Data Extraction ---
+    # --- Sample Founders FIRST ---
     true_num_individuals = mts.num_samples // ploidy
+    founder_indices = np.sort(rng.choice(true_num_individuals, n_ind, replace=False))
+    
+    # --- Data Extraction with Proper MAF Filtering ---
     all_variants = list(mts.variants())
-
-    # Initialize final data structures
     genetic_map = np.full((n_chr, n_loci_per_chr), np.nan)
-    full_haplotype_matrix = np.full(
-        (true_num_individuals, n_chr, ploidy, n_loci_per_chr), np.nan
-    )
+    # Only store founder data directly
+    founder_haplotype_matrix = np.full((n_ind, n_chr, ploidy, n_loci_per_chr), np.nan)
 
     for i in range(n_chr):
         chr_start, chr_end, recomb_rate = rate_map.left[i], rate_map.right[i], rate_map.rate[i]
 
-        eligible_snps = [
+        # Get all biallelic SNPs in this chromosome
+        chromosome_snps = [
             var for var in all_variants
-            if chr_start <= var.site.position < chr_end 
-            and len(var.alleles) == 2 
-            and min(np.mean(var.genotypes), 1 - np.mean(var.genotypes)) > maf_threshold
+            if chr_start <= var.site.position < chr_end and len(var.alleles) == 2
         ]
+
+        if enforce_founder_maf:
+            # Apply MAF filter to the FOUNDER population only
+            eligible_snps = []
+            for var in chromosome_snps:
+                # Extract genotypes for founders only
+                all_genotypes = var.genotypes.reshape(true_num_individuals, ploidy)
+                founder_genotypes = all_genotypes[founder_indices]
+                founder_maf = min(np.mean(founder_genotypes), 1 - np.mean(founder_genotypes))
+                
+                if founder_maf > maf_threshold:
+                    eligible_snps.append(var)
+        else:
+            # Apply MAF filter to the full simulated population (original behavior)
+            eligible_snps = [
+                var for var in chromosome_snps
+                if min(np.mean(var.genotypes), 1 - np.mean(var.genotypes)) > maf_threshold
+            ]
 
         num_found = len(eligible_snps)
         num_to_select = min(num_found, n_loci_per_chr)
@@ -403,22 +468,25 @@ def msprime_pop(
             selected_snps.sort(key=lambda v: v.site.position)
 
             for snp_idx, snp in enumerate(selected_snps):
-                genotypes_for_snp = snp.genotypes.reshape(true_num_individuals, ploidy)
-                full_haplotype_matrix[:, i, :, snp_idx] = genotypes_for_snp
+                # Extract genotypes for ALL individuals, then subset to founders
+                all_genotypes = snp.genotypes.reshape(true_num_individuals, ploidy)
+                founder_genotypes = all_genotypes[founder_indices]
+                founder_haplotype_matrix[:, i, :, snp_idx] = founder_genotypes
 
             positions_cm = [(v.site.position - chr_start) * recomb_rate * 100 for v in selected_snps]
             genetic_map[i, :num_to_select] = positions_cm
         elif num_found == 0:
             import warnings
+            population_type = "founder" if enforce_founder_maf else "full simulated"
             warnings.warn(
-                f"No variants found for chromosome {i} with MAF > {maf_threshold}. "
-                f"Consider lowering maf_threshold or increasing mutation_rate/effective_population_size.",
+                f"No variants found for chromosome {i} with MAF > {maf_threshold} in the "
+                f"{population_type} population. Consider lowering maf_threshold or "
+                f"increasing mutation_rate/effective_population_size.",
                 UserWarning
             )
 
-    # --- Sample Founders and Format for Population Object ---
-    founder_indices = np.sort(rng.choice(true_num_individuals, n_ind, replace=False))
-    founder_haplotypes = full_haplotype_matrix[founder_indices, :, :, :]
+    # --- Founder data is already extracted ---
+    founder_haplotypes = founder_haplotype_matrix
 
     # Convert to JAX arrays
     geno = jnp.array(founder_haplotypes, dtype=jnp.uint8)
@@ -438,8 +506,6 @@ def msprime_pop(
         pheno=jnp.zeros((n_ind, 0)),
         fixEff=jnp.zeros(n_ind, dtype=jnp.float32),
         bv=jnp.zeros((n_ind, 0)),
-        dd=None,
-        aa=None,
         miscPop={
             'msprime_params': {
                 'effective_population_size': effective_population_size,
@@ -447,7 +513,8 @@ def msprime_pop(
                 'recombination_rate_per_chr': recombination_rate_per_chr,
                 'maf_threshold': maf_threshold,
                 'num_simulated_individuals': num_simulated_individuals,
-                'base_chr_length': base_chr_length
+                'base_chr_length': base_chr_length,
+                'enforce_founder_maf': enforce_founder_maf
             }
         }
     )
