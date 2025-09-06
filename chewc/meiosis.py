@@ -259,3 +259,116 @@ def meiosis_for_one_cross(key: jax.random.PRNGKey,
     progeny_geno = jnp.stack([mother_gametes, father_gametes], axis=1)
 
     return progeny_geno
+
+# %% ../nbs/05_meiosis.ipynb 7
+@partial(jax.jit, static_argnames=("max_crossovers",))
+def _create_gamete(key: jax.random.PRNGKey, 
+                   parental_geno_haplotypes: jnp.ndarray,
+                   parental_ibd_haplotypes: jnp.ndarray,  # NEW: IBD haplotypes
+                   gen_map: jnp.ndarray,
+                   v_interference: float,
+                   max_crossovers: int = 20) -> tuple[jnp.ndarray, jnp.ndarray]:  # Return both geno and IBD
+    """
+    Creates a single recombinant gamete from a parent's two haplotypes for one
+    chromosome, tracking both genotypes and IBD.
+
+    Args:
+        key: A JAX random key.
+        parental_geno_haplotypes: A (2, nLoci) array of the two parental genotype haplotypes.
+        parental_ibd_haplotypes: A (2, nLoci) array of the two parental IBD haplotypes.
+        gen_map: A (nLoci,) array of locus positions.
+        v_interference: The interference parameter for chiasma sampling.
+        max_crossovers: A static integer for the maximum number of crossovers.
+
+    Returns:
+        A tuple of (new_geno_gamete, new_ibd_gamete), both (nLoci,) arrays.
+    """
+    key, chiasma_key, hap_key = jax.random.split(key, 3)
+
+    map_length = gen_map[-1]
+    
+    crossover_positions = _sample_chiasmata(chiasma_key, map_length, 
+                                            v_interference, max_crossovers)
+
+    crossover_indices = jnp.searchsorted(gen_map, crossover_positions)
+
+    start_hap = jax.random.choice(hap_key, jnp.array([0, 1], dtype=jnp.uint8))
+
+    n_loci = gen_map.shape[0]
+    
+    # Use side='right' to ensure the crossover happens at the correct locus index.
+    locus_segments = jnp.searchsorted(crossover_indices, jnp.arange(n_loci), side='right')
+    
+    haplotype_choice = (start_hap + locus_segments) % 2
+    
+    # Apply THE SAME choice mask to both genotypes and IBD
+    new_geno_gamete = jnp.where(haplotype_choice == 0, 
+                                parental_geno_haplotypes[0], 
+                                parental_geno_haplotypes[1])
+    
+    new_ibd_gamete = jnp.where(haplotype_choice == 0,
+                               parental_ibd_haplotypes[0],
+                               parental_ibd_haplotypes[1])
+    
+    return new_geno_gamete, new_ibd_gamete
+
+
+@partial(jax.jit, static_argnames=("n_chr",))
+def meiosis_for_one_cross(key: jax.random.PRNGKey,
+                          mother_geno: jnp.ndarray,
+                          father_geno: jnp.ndarray,
+                          mother_ibd: jnp.ndarray,   # NEW: Mother IBD
+                          father_ibd: jnp.ndarray,   # NEW: Father IBD
+                          n_chr: int,
+                          gen_map: jnp.ndarray,
+                          v_interference: float
+                         ) -> tuple[jnp.ndarray, jnp.ndarray]:  # Return both geno and IBD
+    """
+    Creates a single diploid progeny's genotype and IBD from two parents
+    by simulating meiosis for all chromosomes in parallel.
+
+    Args:
+        key: A JAX random key.
+        mother_geno: The mother's genotype. Shape: `(nChr, ploidy, nLoci)`.
+        father_geno: The father's genotype. Shape: `(nChr, ploidy, nLoci)`.
+        mother_ibd: The mother's IBD array. Shape: `(nChr, ploidy, nLoci)`.
+        father_ibd: The father's IBD array. Shape: `(nChr, ploidy, nLoci)`.
+        n_chr: The number of chromosomes. **Must be a static integer.**
+        gen_map: The genetic map defining locus positions for each chromosome.
+        v_interference: The interference parameter for the Gamma process.
+
+    Returns:
+        A tuple of (progeny_geno, progeny_ibd), both with shape `(nChr, ploidy, nLoci)`.
+    """
+
+    key_mother, key_father = jax.random.split(key)
+
+    # Define a vectorized version of the single-chromosome gamete creator.
+    vmapped_gamete_creator = vmap(
+        _create_gamete,
+        in_axes=(0, 0, 0, 0, None)  # Map over keys, geno, ibd, gen_map; broadcast v
+    )
+
+    # Create all of the mother's gametes in parallel
+    mother_geno_gametes, mother_ibd_gametes = vmapped_gamete_creator(
+        jax.random.split(key_mother, n_chr),
+        mother_geno,
+        mother_ibd,
+        gen_map,
+        v_interference
+    )
+
+    # Create all of the father's gametes in parallel
+    father_geno_gametes, father_ibd_gametes = vmapped_gamete_creator(
+        jax.random.split(key_father, n_chr),
+        father_geno,
+        father_ibd,
+        gen_map,
+        v_interference
+    )
+
+    # Stack the two resulting gametes to form the new diploid genotype and IBD
+    progeny_geno = jnp.stack([mother_geno_gametes, father_geno_gametes], axis=1)
+    progeny_ibd = jnp.stack([mother_ibd_gametes, father_ibd_gametes], axis=1)
+
+    return progeny_geno, progeny_ibd

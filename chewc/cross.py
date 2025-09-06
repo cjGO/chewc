@@ -17,60 +17,61 @@ from .population import Population
 from .meiosis import meiosis_for_one_cross
 
 # %% ../nbs/06_cross.ipynb 4
-# chewc/cross.py
-
-
 @partial(jax.jit, static_argnames=("n_chr",))
 def _make_cross_geno(
     key: jax.random.PRNGKey,
     mothers_geno: jnp.ndarray,
     fathers_geno: jnp.ndarray,
+    mothers_ibd: jnp.ndarray,    # NEW: Mothers' IBD
+    fathers_ibd: jnp.ndarray,    # NEW: Fathers' IBD
     n_chr: int,
     gen_map: jnp.ndarray,
     recomb_param_v: float
-) -> jnp.ndarray:
+) -> tuple[jnp.ndarray, jnp.ndarray]:  # Return both geno and IBD
     """
-    (Internal JIT-compiled core) Creates progeny genotypes from parent genotypes.
+    (Internal JIT-compiled core) Creates progeny genotypes and IBD from parent genotypes and IBD.
 
     This function contains only JAX-traceable operations, making it ideal for
-    `jax.jit`. It takes JAX arrays as input and returns a JAX array.
+    `jax.jit`. It takes JAX arrays as input and returns JAX arrays.
 
     Args:
         key: A JAX random key. A unique key must be provided for each
              batch of crosses.
         mothers_geno: Genotypes of the mothers. Shape: (nCrosses, nChr, ploidy, nLoci).
         fathers_geno: Genotypes of the fathers. Shape: (nCrosses, nChr, ploidy, nLoci).
+        mothers_ibd: IBD arrays of the mothers. Shape: (nCrosses, nChr, ploidy, nLoci).
+        fathers_ibd: IBD arrays of the fathers. Shape: (nCrosses, nChr, ploidy, nLoci).
         n_chr: The number of chromosomes (static argument).
         gen_map: The genetic map.
         recomb_param_v: The 'v' interference parameter for recombination.
 
     Returns:
-        A JAX array of progeny genotypes. Shape: (nCrosses, nChr, ploidy, nLoci).
+        A tuple of (progeny_geno, progeny_ibd), both with shape (nCrosses, nChr, ploidy, nLoci).
     """
     # Vectorize the single-cross meiosis function to run all crosses in parallel.
     # `in_axes` maps over the first dimension (the "cross" dimension) of the
-    # keys and parent genotypes, while broadcasting the static parameters.
+    # keys and parent data, while broadcasting the static parameters.
     vmapped_cross_creator = vmap(
         meiosis_for_one_cross,
-        in_axes=(0, 0, 0, None, None, None)
+        in_axes=(0, 0, 0, 0, 0, None, None, None)  # Updated for IBD arrays
     )
 
     n_crosses = mothers_geno.shape[0]
     cross_keys = jax.random.split(key, n_crosses)
 
-    progeny_geno = vmapped_cross_creator(
+    progeny_geno, progeny_ibd = vmapped_cross_creator(
         cross_keys,
         mothers_geno,
         fathers_geno,
+        mothers_ibd,  # Pass mothers' IBD
+        fathers_ibd,  # Pass fathers' IBD
         n_chr,
         gen_map,
         recomb_param_v
     )
-    return progeny_geno
+    return progeny_geno, progeny_ibd
 
 
-
-# %% ../nbs/06_cross.ipynb 5
 def make_cross(
     key: jax.random.PRNGKey,
     pop: Population,
@@ -92,7 +93,6 @@ def make_cross(
         sp: The simulation parameters.
         next_id_start: The starting integer for the new individuals' public IDs.
 
-
     Returns:
         A new Population object for the progeny.
     """
@@ -104,12 +104,16 @@ def make_cross(
     father_iids = cross_plan[:, 1]
     mothers_geno = pop.geno[mother_iids]
     fathers_geno = pop.geno[father_iids]
+    mothers_ibd = pop.ibd[mother_iids]    # NEW: Extract mothers' IBD
+    fathers_ibd = pop.ibd[father_iids]    # NEW: Extract fathers' IBD
 
     # 2. Call the highly-optimized, JIT-compiled core function
-    progeny_geno = _make_cross_geno(
+    progeny_geno, progeny_ibd = _make_cross_geno(  # Updated to return both
         key_geno,
         mothers_geno,
         fathers_geno,
+        mothers_ibd,   # Pass mothers' IBD
+        fathers_ibd,   # Pass fathers' IBD
         sp.n_chr,
         sp.gen_map,
         sp.recomb_params[0]
@@ -123,6 +127,7 @@ def make_cross(
 
     progeny_pop = Population(
         geno=progeny_geno,
+        ibd=progeny_ibd,  # NEW: Include progeny IBD
         id=new_public_ids,
         iid=new_iids,
         mother=mother_public_ids,
