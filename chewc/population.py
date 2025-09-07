@@ -570,47 +570,35 @@ def calc_g_matrix(geno_dosage: jnp.ndarray) -> jnp.ndarray:
     return G + jnp.identity(n_ind) * epsilon
 
 def calc_a_matrix_pedigree(pop: Population) -> jnp.ndarray:
-    """
-    Calculate traditional pedigree-based A-matrix using Henderson's algorithm.
-    
-    Note: This is NOT JIT-compiled as it requires dynamic recursion.
-    Use this for validation or when IBD tracking isn't available.
-    """
+    """Calculate pedigree-based A-matrix with proper ID mapping."""
     n_ind = pop.nInd
-    A = jnp.zeros((n_ind, n_ind))
+    A = np.zeros((n_ind, n_ind))
     
-    # Convert to numpy for easier manipulation (non-JIT)
-    A = np.array(A)
+    # Create mapping from public ID to internal index
+    id_to_iid = {int(pub_id): int(iid) for pub_id, iid in zip(pop.id, pop.iid)}
     mother_ids = np.array(pop.mother)
     father_ids = np.array(pop.father)
     
-    # Henderson's algorithm - process individuals in order
+    # Henderson's algorithm
     for i in range(n_ind):
-        A[i, i] = 1.0  # Self-relationship
+        A[i, i] = 1.0
         
-        # Get parents
-        dam_idx = mother_ids[i] if mother_ids[i] >= 0 else None
-        sire_idx = father_ids[i] if father_ids[i] >= 0 else None
+        dam_pub_id = mother_ids[i] if mother_ids[i] >= 0 else None
+        sire_pub_id = father_ids[i] if father_ids[i] >= 0 else None
+        
+        dam_idx = id_to_iid.get(dam_pub_id) if dam_pub_id is not None else None
+        sire_idx = id_to_iid.get(sire_pub_id) if sire_pub_id is not None else None
         
         if dam_idx is not None and sire_idx is not None:
-            # Both parents known
             A[i, i] = 1.0 + 0.5 * A[dam_idx, sire_idx]
-            
-            # Relationships with previous individuals
             for j in range(i):
                 A[i, j] = A[j, i] = 0.5 * (A[j, dam_idx] + A[j, sire_idx])
-        
         elif dam_idx is not None:
-            # Only dam known
             for j in range(i):
                 A[i, j] = A[j, i] = 0.5 * A[j, dam_idx]
-                
         elif sire_idx is not None:
-            # Only sire known  
             for j in range(i):
                 A[i, j] = A[j, i] = 0.5 * A[j, sire_idx]
-        
-        # If no parents known, relationships remain 0 (already set)
     
     return jnp.array(A)
 
