@@ -56,6 +56,8 @@ class Population:
             individual. A value of -1 indicates no known father. Shape: `(nInd,)`.
         sex (jnp.ndarray): The sex of each individual, represented numerically
             (e.g., 0 for male, 1 for female). dtype: `jnp.int8`. Shape: `(nInd,)`.
+        gen (jnp.ndarray): The generation each individual is in, represented numerically
+             dtype: `jnp.int8`. Shape: `(nInd,)`.
 
         pheno (jnp.ndarray): The phenotypic values for each individual.
             Shape: `(nInd, nTraits)`.
@@ -89,6 +91,7 @@ class Population:
     mother: jnp.ndarray
     father: jnp.ndarray
     sex: jnp.ndarray
+    gen: jnp.ndarray
 
     # --- Trait and Value Data ---
     pheno: jnp.ndarray

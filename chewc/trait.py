@@ -67,6 +67,8 @@ def _calculate_gvs_vectorized(
     """
     Calculates all genetic values using a single, highly-optimized matrix
     multiplication.
+
+    Note: using set_pheno on a Pop object will fill these in automatically.
     """
     flat_geno_alleles = pop.geno.transpose((0, 1, 3, 2)).reshape(pop.nInd, -1, ploidy)
     qtl_alleles = flat_geno_alleles[:, traits.loci_loc, :]
