@@ -312,6 +312,7 @@ def quick_haplo(
         mother=jnp.full(n_ind, -1, dtype=jnp.int32),
         father=jnp.full(n_ind, -1, dtype=jnp.int32),
         sex=sex_array,
+        gen=jnp.zeros(n_ind, dtype=jnp.int32),
         pheno=jnp.zeros((n_ind, 0)),
         fixEff=jnp.zeros(n_ind, dtype=jnp.float32), # Default fixed effect of 0
         bv=jnp.zeros((n_ind, 0)),  # No traits by default
@@ -922,7 +923,7 @@ def msprime_pop(
     # --- Create Pedigree and IDs using JAX arrays ---
     ids = jnp.arange(n_ind)
     sex_array = jax.random.choice(sex_key, jnp.array([0, 1], dtype=jnp.int8), (n_ind,))
-
+    
     pop = Population(
         geno=geno,
         ibd=ibd,  # Include IBD tracking
@@ -931,6 +932,7 @@ def msprime_pop(
         mother=jnp.full(n_ind, -1, dtype=jnp.int32),
         father=jnp.full(n_ind, -1, dtype=jnp.int32),
         sex=sex_array,
+        gen=jnp.zeros(n_ind, dtype=jnp.int32),
         pheno=jnp.zeros((n_ind, 0)),
         fixEff=jnp.zeros(n_ind, dtype=jnp.float32),
         bv=jnp.zeros((n_ind, 0)),

@@ -104,16 +104,16 @@ def make_cross(
     father_iids = cross_plan[:, 1]
     mothers_geno = pop.geno[mother_iids]
     fathers_geno = pop.geno[father_iids]
-    mothers_ibd = pop.ibd[mother_iids]    # NEW: Extract mothers' IBD
-    fathers_ibd = pop.ibd[father_iids]    # NEW: Extract fathers' IBD
+    mothers_ibd = pop.ibd[mother_iids]
+    fathers_ibd = pop.ibd[father_iids]
 
     # 2. Call the highly-optimized, JIT-compiled core function
-    progeny_geno, progeny_ibd = _make_cross_geno(  # Updated to return both
+    progeny_geno, progeny_ibd = _make_cross_geno(
         key_geno,
         mothers_geno,
         fathers_geno,
-        mothers_ibd,   # Pass mothers' IBD
-        fathers_ibd,   # Pass fathers' IBD
+        mothers_ibd,
+        fathers_ibd,
         sp.n_chr,
         sp.gen_map,
         sp.recomb_params[0]
@@ -121,21 +121,31 @@ def make_cross(
 
     # 3. Handle CPU-side logic: create new metadata and Population object
     new_public_ids = jnp.arange(next_id_start, next_id_start + n_crosses)
-    new_iids = jnp.arange(n_crosses) # Internal IDs are always 0-indexed for the new pop
+    new_iids = jnp.arange(n_crosses)
     mother_public_ids = pop.id[mother_iids]
     father_public_ids = pop.id[father_iids]
 
+    # --- KEY CHANGE HERE ---
+    # Infer progeny generation by adding 1 to the parents' generation.
+    # We can safely assume all parents are from the same generation in this context.
+    parent_gen = pop.gen[mother_iids[0]] # Get generation from the first mother
+    progeny_gen = parent_gen + 1
+    # ---------------------
+
     progeny_pop = Population(
         geno=progeny_geno,
-        ibd=progeny_ibd,  # NEW: Include progeny IBD
+        ibd=progeny_ibd,
         id=new_public_ids,
         iid=new_iids,
         mother=mother_public_ids,
         father=father_public_ids,
         sex=jax.random.choice(key_sex, jnp.array([0, 1], dtype=jnp.int8), (n_crosses,)),
-        pheno=jnp.zeros((n_crosses, sp.n_traits)), # Initialize with correct shape
+        # Assign the calculated generation to all progeny
+        gen=jnp.full(n_crosses, progeny_gen, dtype=jnp.int32),
+        pheno=jnp.zeros((n_crosses, sp.n_traits)),
         fixEff=jnp.zeros(n_crosses, dtype=jnp.float32),
-        bv=jnp.zeros((n_crosses, sp.n_traits)) # Initialize with correct shape
+        bv=jnp.zeros((n_crosses, sp.n_traits))
     )
 
     return progeny_pop
+
