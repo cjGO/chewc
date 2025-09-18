@@ -15,6 +15,8 @@ from functools import partial
 from .sp import SimParam
 from .population import Population
 from .meiosis import meiosis_for_one_cross
+from jax import debug
+
 
 # %% ../nbs/06_cross.ipynb 4
 @partial(jax.jit, static_argnames=("n_chr",))
@@ -72,6 +74,9 @@ def _make_cross_geno(
     return progeny_geno, progeny_ibd
 
 
+#| export
+from jax import debug
+
 def make_cross(
     key: jax.random.PRNGKey,
     pop: Population,
@@ -120,17 +125,21 @@ def make_cross(
     )
 
     # 3. Handle CPU-side logic: create new metadata and Population object
+    # --- FIX: Renamed `id` to `new_public_ids` to avoid shadowing the builtin ---
     new_public_ids = jnp.arange(next_id_start, next_id_start + n_crosses)
     new_iids = jnp.arange(n_crosses)
     mother_public_ids = pop.id[mother_iids]
     father_public_ids = pop.id[father_iids]
 
-    # --- KEY CHANGE HERE ---
     # Infer progeny generation by adding 1 to the parents' generation.
     # We can safely assume all parents are from the same generation in this context.
-    parent_gen = pop.gen[mother_iids[0]] # Get generation from the first mother
+    parent_gen = pop.gen[mother_iids[0]]
     progeny_gen = parent_gen + 1
-    # ---------------------
+    
+    # This debug print is now safe
+    debug.print("TRACE make_cross geno type={} shape={}", type(progeny_geno), getattr(progeny_geno, 'shape', None))
+    debug.print("TRACE make_cross new_public_ids type={} shape={}", type(new_public_ids), getattr(new_public_ids, 'shape', None))
+    progeny_gen = parent_gen + 1
 
     progeny_pop = Population(
         geno=progeny_geno,
@@ -140,8 +149,7 @@ def make_cross(
         mother=mother_public_ids,
         father=father_public_ids,
         sex=jax.random.choice(key_sex, jnp.array([0, 1], dtype=jnp.int8), (n_crosses,)),
-        # Assign the calculated generation to all progeny
-        gen=jnp.full(n_crosses, progeny_gen, dtype=jnp.int32),
+        gen=jnp.full((n_crosses,), progeny_gen, dtype=jnp.int32),
         pheno=jnp.zeros((n_crosses, sp.n_traits)),
         fixEff=jnp.zeros(n_crosses, dtype=jnp.float32),
         bv=jnp.zeros((n_crosses, sp.n_traits))

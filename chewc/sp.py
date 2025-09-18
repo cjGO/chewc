@@ -7,45 +7,40 @@ __all__ = ['SimParam']
 
 # %% ../nbs/02_simParam.ipynb 3
 import jax.numpy as jnp
-from flax.struct import dataclass as flax_dataclass
-from dataclasses import field
+from flax.struct import dataclass as flax_dataclass, field
 from typing import List, Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
+
 # No need for cached_property anymore for these core attributes
 # from functools import cached_property
 
+import jax.numpy as jnp
+from flax.struct import dataclass as flax_dataclass, field
+from typing import List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from chewc.trait import TraitCollection, LociMap
+    from chewc.population import Population
+
 @flax_dataclass(frozen=True)
 class SimParam:
-    """
-    A container for all global simulation parameters.
-
-    This object defines the static rules of the simulation, such as the
-    genetic map and ploidy. It is created once at the beginning of a
-    simulation and is treated as immutable.
-
-    --- JAX JIT Compilation Notes ---
-    ... (docstring remains the same) ...
-    """
-    # --- Core Genome Structure (Primary Inputs) ---
+    """A container for all global simulation parameters."""
+    # --- JAX-Compatible Attributes (leaves of the Pytree) ---
     gen_map: jnp.ndarray
     ploidy: int
-
-    # --- Genetic Architecture ---
     traits: Optional['TraitCollection'] = None
-    snp_chips: List['LociMap'] = field(default_factory=list)
-
-    # --- Simulation Control ---
-    sexes: str = "no"
     recomb_params: tuple = (2.6, 0.0, 0.0)
-    n_threads: int = 1
-
-    # --- Pedigree & History Tracking ---
-    track_pedigree: bool = False
-    track_recomb: bool = False
     pedigree: Optional[jnp.ndarray] = None
-    last_id: int = 0 # Can be initialized to 0 now
-
-    # --- Default Phenotyping Parameters ---
     var_e: Optional[jnp.ndarray] = None
+    
+    # --- Static, Non-Traceable Attributes ---
+    # These are ignored by JAX transformations like jit and vmap.
+    sexes: str = field(default='no', pytree_node=False)
+    snp_chips: List['LociMap'] = field(default_factory=list, pytree_node=False)
+    n_threads: int = field(default=1, pytree_node=False)
+    track_pedigree: bool = field(default=False, pytree_node=False)
+    track_recomb: bool = field(default=False, pytree_node=False)
+    last_id: int = field(default=0, pytree_node=False)
 
     @classmethod
     def from_founder_pop(
@@ -54,28 +49,16 @@ class SimParam:
         gen_map: jnp.ndarray,
         **kwargs
     ) -> 'SimParam':
-        """
-        Creates a SimParam object from a founder population and its genetic map.
-
-        This is the recommended way to initialize simulation parameters. It
-        ensures that the simulation's rules are perfectly aligned with the
-        initial state of the first population.
-
-        Args:
-            founder_pop: The initial Population object.
-            gen_map: A JAX array containing the genetic map.
-            **kwargs: Additional SimParam attributes to set (e.g., sexes='yes').
-        
-        Returns:
-            A new, fully configured SimParam object.
-        """
-
+        # Using direct shape access is more robust
+        ploidy = founder_pop.geno.shape[2]
+        n_ind = founder_pop.geno.shape[0]
         return cls(
             gen_map=gen_map,
-            ploidy=founder_pop.geno.shape[2],
-            last_id=founder_pop.nInd,
+            ploidy=ploidy,
+            last_id=n_ind,
             **kwargs
         )
+
 
     # --- Derived Properties ---
     @property

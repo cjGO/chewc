@@ -13,35 +13,33 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from .population import Population
-from .trait import TraitCollection
-from jaxtyping import Array, Float
-
 
 # --- Imports for Testing ---
 from fastcore.test import test_eq, test_close, test_fail
 import jax
 import jax.numpy as jnp
 
-# --- Functions from other modules needed for testing ---
-from .population import quick_haplo
-from .sp import SimParam
-from .trait import add_trait_a, _calculate_gvs_vectorized
+# --- Project-Specific Imports ---
+from .population import Population      # <-- Import the Population class
+from .trait import TraitCollection       # <-- Import the TraitCollection class
+
 
 # %% ../nbs/04_phenotype.ipynb 4
 # chewc/phenotype.py
 
 
-# This function remains a core, JIT-able utility
-def _calculate_gvs_vectorized_alternative(
+@partial(jax.jit, static_argnames=('ploidy',))
+def _calculate_gvs(
     pop: Population,
     traits: TraitCollection,
     ploidy: int
 ) -> tuple[Float[Array, "nInd nTraits"], Float[Array, "nInd nTraits"]]:
     """
-    Calculates all genetic values using a single, highly-optimized matrix
-    multiplication.
+    (JIT-compiled) Calculates all genetic values using a single, 
+    highly-optimized matrix multiplication. 'ploidy' is a static argument
+    because it affects array shapes during compilation.
     """
+    # This logic is identical to your _calculate_gvs_vectorized_alternative
     flat_geno_alleles = pop.geno.transpose((0, 1, 3, 2)).reshape(pop.nInd, -1, ploidy)
     qtl_alleles = flat_geno_alleles[:, traits.loci_loc, :]
     qtl_geno = jnp.sum(qtl_alleles, axis=2)
@@ -50,12 +48,10 @@ def _calculate_gvs_vectorized_alternative(
     return all_bv, all_gvs
 
 
+
 #| export
 # In chewc/phenotype.py, alongside set_pheno
 
-from functools import partial
-from .trait import TraitCollection, _calculate_gvs_vectorized # Make sure helper is importable
-from .population import Population
 def set_bv(
     pop: Population,
     traits: TraitCollection,
@@ -66,36 +62,10 @@ def set_bv(
     for a population based on its genotypes and a given trait architecture.
     This function does NOT generate phenotypes or environmental noise.
     """
-    # This is the same highly-optimized core logic used in set_pheno
-    gvs_calculator = jax.jit(
-        partial(_calculate_gvs_vectorized, ploidy=ploidy)
-    )
-    bvs, gvs = gvs_calculator(pop=pop, traits=traits)
-    
+    # Call the pre-compiled JAX kernel
+    bvs, gvs = _calculate_gvs(pop=pop, traits=traits, ploidy=ploidy)
     return pop.replace(bv=bvs, gv=gvs)
 
-
-
-# %% ../nbs/04_phenotype.ipynb 5
-def _add_environmental_noise(
-    key: jax.random.PRNGKey,
-    gvs: Float[Array, "nInd nTraits"],
-    var_e: Float[Array, "nTraits"],
-    cor_e: Float[Array, "nTraits nTraits"],
-) -> Float[Array, "nInd nTraits"]:
-    """
-    Internal JIT-able function to generate and add environmental noise.
-    """
-    n_ind, n_traits = gvs.shape
-    cov_e = jnp.diag(jnp.sqrt(var_e)) @ cor_e @ jnp.diag(jnp.sqrt(var_e))
-    environmental_noise = jax.random.multivariate_normal(
-        key, jnp.zeros(n_traits), cov_e, (n_ind,)
-    )
-    return gvs + environmental_noise
-
-
-
-# %% ../nbs/04_phenotype.ipynb 6
 def set_pheno(
     key: jax.random.PRNGKey,
     pop: Population,
@@ -118,15 +88,13 @@ def set_pheno(
     if cor_e is None:
         cor_e = jnp.identity(traits.n_traits)
 
-    # 2. --- Core Genetic Calculation (JIT-able) ---
-    # We bake `ploidy` into a partial function and JIT it
-    gvs_calculator = jax.jit(
-        partial(_calculate_gvs_vectorized_alternative, ploidy=ploidy)
-    )
-    bvs, gvs = gvs_calculator(pop=pop, traits=traits)
+    # 2. --- Core Genetic Calculation ---
+    # Call the pre-compiled JAX kernel for calculating genetic values
+    bvs, gvs = _calculate_gvs(pop=pop, traits=traits, ploidy=ploidy)
 
     # 3. --- Determine Environmental Variance (Python Land) ---
-    # This logic now lives outside any JIT compilation path
+    # This logic remains outside the JIT path as it involves data-dependent
+    # shape calculations that are fine to run on the CPU.
     if h2 is not None:
         var_g = jnp.var(gvs, axis=0)
         # Add a small epsilon to prevent division by zero for traits with no variance
@@ -135,10 +103,31 @@ def set_pheno(
     else: # varE is not None
         var_e = varE
 
-    # 4. --- Add Environmental Noise (JIT-able) ---
-    # The noise calculator is a pure function, so we can JIT it directly
-    noise_adder = jax.jit(_add_environmental_noise)
-    pheno = noise_adder(key=key, gvs=gvs, var_e=var_e, cor_e=cor_e)
+    # 4. --- Add Environmental Noise ---
+    # Call the pre-compiled JAX kernel for adding noise
+    pheno = _add_environmental_noise(key=key, gvs=gvs, var_e=var_e, cor_e=cor_e)
 
     # 5. --- Update Population ---
     return pop.replace(bv=bvs, gv=gvs, pheno=pheno)
+
+
+# %% ../nbs/04_phenotype.ipynb 5
+@jax.jit
+def _add_environmental_noise(
+    key: jax.random.PRNGKey,
+    gvs: Float[Array, "nInd nTraits"],
+    var_e: Float[Array, "nTraits"],
+    cor_e: Float[Array, "nTraits nTraits"],
+) -> Float[Array, "nInd nTraits"]:
+    """
+    (JIT-compiled) Internal function to generate and add environmental noise.
+    """
+    n_ind, n_traits = gvs.shape
+    # Ensure var_e is non-negative before taking the square root
+    safe_var_e = jnp.maximum(var_e, 0.)
+    cov_e = jnp.diag(jnp.sqrt(safe_var_e)) @ cor_e @ jnp.diag(jnp.sqrt(safe_var_e))
+    environmental_noise = jax.random.multivariate_normal(
+        key, jnp.zeros(n_traits), cov_e, (n_ind,)
+    )
+    return gvs + environmental_noise
+
