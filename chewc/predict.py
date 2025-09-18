@@ -49,7 +49,8 @@ import jax.numpy as jnp
 from flax.struct import dataclass as flax_dataclass
 
 # Make sure to import the necessary functions from your population module
-from .population import Population, calc_relationship_matrices, calc_a_inverse_matrix_pedigree_jax
+from .population import Population
+from .relationships import calc_relationship_matrices, calc_a_inverse_matrix_pedigree_jax
 
 @flax_dataclass(frozen=True)
 class PredictionResults:

@@ -233,87 +233,57 @@ from jax import lax
 # Assuming 'Population' is a class or dataclass available in your environment
 # from your_library import Population
 
-@jax.jit
-def calc_a_inverse_matrix_pedigree_jax(pop: Population) -> jnp.ndarray:
+def calc_a_inverse_matrix_pedigree_jax(pop) -> jnp.ndarray:
     """
-    Calculates the inverse of the pedigree-based A-matrix (A-inverse)
-    directly from a pedigree using Henderson's rules in an idiomatic JAX way.
-
-    This version uses jax.lax.fori_loop to be efficiently JIT-compilable.
-
-    Args:
-        pop: The Population object containing pedigree information. It is assumed
-             that pop.id, pop.iid, pop.mother, and pop.father are JAX arrays
-             or can be converted to them.
-
-    Returns:
-        A JAX array representing the sparse A-inverse matrix.
+    Calculates the inverse of the pedigree-based A-matrix directly using
+    Henderson's rules. This version runs in regular Python, not JIT.
     """
     n_ind = pop.nInd
-    # Use jnp arrays from the start.
     mother_iids = jnp.asarray(pop.mother)
     father_iids = jnp.asarray(pop.father)
-    
-    # Create the public ID to internal iid mapping.
-    # Note: Dictionaries are not generally traceable in JAX. However, because
-    # we are only using it to look up static pedigree info *before* the loop,
-    # this is acceptable. For a fully traceable solution, one might use
-    # arrays for lookups, but this is clear and often sufficient.
+
+    # This dictionary creation is the reason JIT fails. It needs concrete values.
     id_to_iid = {int(pub_id): int(iid) for pub_id, iid in zip(pop.id, pop.iid)}
-    # A value of -1 will represent an unknown parent.
     unknown_parent_iid = -1
 
-    def loop_body(i, A_inv):
-        # Get sire and dam internal indices (iid).
+    A_inv = jnp.zeros((n_ind, n_ind))
+
+    # We use a standard Python loop here.
+    for i in range(n_ind):
         sire_pub_id = father_iids[i]
         dam_pub_id = mother_iids[i]
-        
-        # Perform lookups.
+
         s = id_to_iid.get(int(sire_pub_id), unknown_parent_iid)
         d = id_to_iid.get(int(dam_pub_id), unknown_parent_iid)
 
-        # We use lax.switch to handle the different cases. This is more
-        # JAX-friendly than Python if/elif/else statements inside a jitted function.
-        # The index for the switch is determined by the parent combination.
-        case_index = (s != unknown_parent_iid) + (d != unknown_parent_iid) * 2
-        
-        # Define the update functions for each case.
-        # Each function takes the A_inv matrix and returns the updated version.
-        
-        # Case 0: Both parents unknown (s=-1, d=-1) -> index = 0
-        def case_0(mat):
-            return mat.at[i, i].add(1.0)
-
-        # Case 1: Sire known, Dam unknown (s!=-1, d=-1) -> index = 1
-        def case_1(mat):
-            return mat.at[i, i].add(4/3).at[s, s].add(1/3).at[i, s].add(-2/3).at[s, i].add(-2/3)
+        # Henderson's rules applied based on known parents
+        if s == unknown_parent_iid and d == unknown_parent_iid:
+            # Both parents unknown
+            A_inv = A_inv.at[i, i].add(1.0)
+        elif s != unknown_parent_iid and d == unknown_parent_iid:
+            # Sire known, dam unknown
+            A_inv = A_inv.at[i, i].add(4/3)
+            A_inv = A_inv.at[s, s].add(1/3)
+            A_inv = A_inv.at[i, s].add(-2/3)
+            A_inv = A_inv.at[s, i].add(-2/3)
+        elif s == unknown_parent_iid and d != unknown_parent_iid:
+            # Dam known, sire unknown
+            A_inv = A_inv.at[i, i].add(4/3)
+            A_inv = A_inv.at[d, d].add(1/3)
+            A_inv = A_inv.at[i, d].add(-2/3)
+            A_inv = A_inv.at[d, i].add(-2/3)
+        else:
+            # Both parents known
+            A_inv = A_inv.at[i, i].add(2.0)
+            A_inv = A_inv.at[s, s].add(0.5)
+            A_inv = A_inv.at[d, d].add(0.5)
+            A_inv = A_inv.at[s, d].add(0.5)
+            A_inv = A_inv.at[d, s].add(0.5)
+            A_inv = A_inv.at[i, s].add(-1.0)
+            A_inv = A_inv.at[s, i].add(-1.0)
+            A_inv = A_inv.at[i, d].add(-1.0)
+            A_inv = A_inv.at[d, i].add(-1.0)
             
-        # Case 2: Sire unknown, Dam known (s=-1, d!=-1) -> index = 2
-        def case_2(mat):
-            return mat.at[i, i].add(4/3).at[d, d].add(1/3).at[i, d].add(-2/3).at[d, i].add(-2/3)
-
-        # Case 3: Both parents known (s!=-1, d!=-1) -> index = 3
-        def case_3(mat):
-            # This assumes parents are not inbred. For inbred parents, you would
-            # need to incorporate their inbreeding coefficients here.
-            return (mat.at[i, i].add(2.0)
-                       .at[s, s].add(0.5)
-                       .at[d, d].add(0.5)
-                       .at[s, d].add(0.5)
-                       .at[d, s].add(0.5)
-                       .at[i, s].add(-1.0)
-                       .at[s, i].add(-1.0)
-                       .at[i, d].add(-1.0)
-                       .at[d, i].add(-1.0))
-
-        return lax.switch(case_index, [case_0, case_1, case_2, case_3], A_inv)
-
-    # Initialize A-inverse matrix as a JAX array.
-    initial_A_inv = jnp.zeros((n_ind, n_ind))
-    
-    # Run the fori_loop.
-    A_inv = lax.fori_loop(0, n_ind, loop_body, initial_A_inv)
-    
     return A_inv
 
 # Convenience function for the Population class
