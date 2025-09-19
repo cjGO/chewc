@@ -126,34 +126,52 @@ def make_cross(
 
     # 3. Handle CPU-side logic: create new metadata and Population object
     # --- FIX: Renamed `id` to `new_public_ids` to avoid shadowing the builtin ---
-    new_public_ids = jnp.arange(next_id_start, next_id_start + n_crosses)
+    """
+    Patched version of make_cross with the arange fix and debug prints.
+    """
+    n_crosses = cross_plan.shape[0]
+    key_geno, key_sex = jax.random.split(key)
+
+    mother_iids = cross_plan[:, 0]
+    father_iids = cross_plan[:, 1]
+    mothers_geno = pop.geno[mother_iids]
+    fathers_geno = pop.geno[father_iids]
+    mothers_ibd = pop.ibd[mother_iids]
+    fathers_ibd = pop.ibd[father_iids]
+
+    # This call is already JIT-friendly
+    progeny_geno, progeny_ibd = _make_cross_geno(
+        key_geno, mothers_geno, fathers_geno, mothers_ibd, fathers_ibd,
+        sp.n_chr, sp.gen_map, sp.recomb_params[0]
+    )
+
+    # --- THE FIX ---
+    # Create an array of shape (n_crosses,) starting from 0. The length is static.
+    # Then, add the dynamic `next_id_start` value. JAX can trace this.
+    new_public_ids = next_id_start + jnp.arange(n_crosses)
+    # --- END OF FIX ---
+    
     new_iids = jnp.arange(n_crosses)
     mother_public_ids = pop.id[mother_iids]
     father_public_ids = pop.id[father_iids]
-
-    # Infer progeny generation by adding 1 to the parents' generation.
-    # We can safely assume all parents are from the same generation in this context.
     parent_gen = pop.gen[mother_iids[0]]
     progeny_gen = parent_gen + 1
-    
-    # This debug print is now safe
-    debug.print("TRACE make_cross geno type={} shape={}", type(progeny_geno), getattr(progeny_geno, 'shape', None))
-    debug.print("TRACE make_cross new_public_ids type={} shape={}", type(new_public_ids), getattr(new_public_ids, 'shape', None))
-    progeny_gen = parent_gen + 1
 
+    # --- LIBERAL DEBUGGING STATEMENTS ---
+    # debug.print("--- Inside make_cross_debug ---")
+    # debug.print("next_id_start: {}", next_id_start)
+    # debug.print("n_crosses: {}", n_crosses)
+    # debug.print("Shape of progeny_geno: {}", progeny_geno.shape)
+    # debug.print("Shape of new_public_ids: {}", new_public_ids.shape)
+    # debug.print("First 5 new_public_ids: {}", new_public_ids[:5])
+    
     progeny_pop = Population(
-        geno=progeny_geno,
-        ibd=progeny_ibd,
-        id=new_public_ids,
-        iid=new_iids,
-        mother=mother_public_ids,
-        father=father_public_ids,
+        geno=progeny_geno, ibd=progeny_ibd, id=new_public_ids, iid=new_iids,
+        mother=mother_public_ids, father=father_public_ids,
         sex=jax.random.choice(key_sex, jnp.array([0, 1], dtype=jnp.int8), (n_crosses,)),
         gen=jnp.full((n_crosses,), progeny_gen, dtype=jnp.int32),
         pheno=jnp.zeros((n_crosses, sp.n_traits)),
         fixEff=jnp.zeros(n_crosses, dtype=jnp.float32),
         bv=jnp.zeros((n_crosses, sp.n_traits))
     )
-
     return progeny_pop
-
