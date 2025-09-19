@@ -9,7 +9,6 @@ __all__ = ['Population', 'quick_haplo', 'combine_populations', 'subset_populatio
 from dataclasses import field
 from typing import List, Optional, Dict, Callable, Any
 
-from flax.struct import dataclass as flax_dataclass # Using flax's dataclass for JAX-friendliness
 import jax
 import jax.numpy as jnp
 
@@ -28,58 +27,24 @@ import jax
 import jax.numpy as jnp
 from fastcore.test import test_eq, test_ne
 
-# %% ../nbs/01_population.ipynb 5
-@flax_dataclass(frozen=True) # Make the class immutable, a JAX best practice
+# %% ../nbs/01_population.ipynb 6
+from dataclasses import field
+from typing import List, Optional, Dict, Callable, Any
+from flax.struct import dataclass as flax_dataclass, field
+import jax
+import jax.numpy as jnp
+from jax.core import Tracer  # <-- Import the JAX Tracer base class
+
+# ... other imports from your file (SimParam, msprime, etc.) ...
+
+@flax_dataclass(frozen=True)
 class Population:
     """
     A container for all data related to a population of individuals, designed
     for JAX-based genetic simulations.
-
     This structure is immutable. All operations that modify a population should
     return a new Population object.
-
-    Attributes:
-        geno (jnp.ndarray): A 4D array representing the genotypes of the population.
-            Shape: `(nInd, nChr, ploidy, nLoci)`. dtype: `jnp.uint8`.
-        idb (jnp.ndarray): A 4D array representing the founder origins of each allele of the population.
-            Shape: `(nInd, nChr, ploidy, nLoci)`. dtype: `jnp.uint8`.        id (jnp.ndarray): The primary, user-facing identifier for each individual.
-            These IDs may not be contiguous or sorted. Shape: `(nInd,)`.
-        iid (jnp.ndarray): The internal, zero-indexed, contiguous identifier.
-            Crucial for robust indexing in JAX operations. Shape: `(nInd,)`.
-        mother (jnp.ndarray): Array of internal IDs (`iid`) for the mother of each
-            individual. A value of -1 indicates no known mother. Shape: `(nInd,)`.
-        father (jnp.ndarray): Array of internal IDs (`iid`) for the father of each
-            individual. A value of -1 indicates no known father. Shape: `(nInd,)`.
-        sex (jnp.ndarray): The sex of each individual, represented numerically
-            (e.g., 0 for male, 1 for female). dtype: `jnp.int8`. Shape: `(nInd,)`.
-        gen (jnp.ndarray): The generation each individual is in, represented numerically
-             dtype: `jnp.int8`. Shape: `(nInd,)`.
-
-        pheno (jnp.ndarray): The phenotypic values for each individual.
-            Shape: `(nInd, nTraits)`.
-        fixEff (jnp.ndarray): The value of a fixed effect for each individual,
-            often used as an intercept in genomic selection models. Shape: `(nInd,)`.
-        
-        bv (Optional[jnp.ndarray]): The true breeding values (additive genetic effects)
-            for each individual. Shape: `(nInd, nTraits)`.
-        dd (Optional[jnp.ndarray]): The true dominance deviations for each individual.
-            Shape: `(nInd, nTraits)`.
-        aa (Optional[jnp.ndarray]): The true additive-by-additive epistatic deviations
-            for each individual. Shape: `(nInd, nTraits)`.
-
-        ebv (Optional[jnp.ndarray]): The estimated breeding values for each
-            individual. Shape: `(nInd, nTraits)`.
-        gxe (Optional[jnp.ndarray]): Genotype-by-environment interaction effects.
-            Shape depends on the specific GxE model.
-
-        misc (Dict): A dictionary for storing miscellaneous, non-JAX-critical
-            metadata about individuals. Static.
-        miscPop (Dict): A dictionary for storing miscellaneous, non-JAX-critical
-            metadata about the entire population. Static.
     """
-
-
-
     # --- Core Genotype Info ---
     geno: jnp.ndarray
     ibd : jnp.ndarray
@@ -95,7 +60,7 @@ class Population:
     # --- Trait and Value Data ---
     pheno: jnp.ndarray
     fixEff: jnp.ndarray
-
+    
     gv: Optional[jnp.ndarray] = None      # Genetic Value (BV + Intercept)
     bv: Optional[jnp.ndarray] = None      # Breeding Value (Additive)
     dd: Optional[jnp.ndarray] = None      # Dominance Deviations
@@ -107,6 +72,39 @@ class Population:
     # --- Metadata ---
     misc: Optional[Dict[str, Any]] = field(default=None, pytree_node=False)
     miscPop: Optional[Dict[str, Any]] = field(default=None, pytree_node=False)
+
+    # def __post_init__(self):
+    #     """Validates the consistency of the population data after initialization."""
+    #     # --- START: THE ONLY CHANGE NEEDED IN THIS FILE ---
+    #     # During a JAX trace (jit, vmap, scan), `self.geno` is a Tracer
+    #     # object without a concrete shape. This guard bypasses validation
+    #     # during tracing by checking for an attribute that only tracers have.
+    #     if isinstance(self.geno, Tracer):
+    #         return
+
+    #     # --- END: THE ONLY CHANGE NEEDED IN THIS FILE ---
+
+    #     # The rest of your validation code will now only run in eager mode.
+    #     n_ind = self.nInd
+    #     # Validate pedigree and identifier shapes
+    #     assert self.iid.shape[0] == n_ind, f"Internal ID array length ({self.iid.shape[0]}) must match number of individuals ({n_ind})."
+    #     assert self.mother.shape[0] == n_ind, f"Mother array length ({self.mother.shape[0]}) must match number of individuals ({n_ind})."
+    #     assert self.father.shape[0] == n_ind, f"Father array length ({self.father.shape[0]}) must match number of individuals ({n_ind})."
+    #     assert self.sex.shape[0] == n_ind, f"Sex array length ({self.sex.shape[0]}) must match number of individuals ({n_ind})."
+        
+    #     # Validate trait-related array shapes
+    #     assert self.pheno.shape[0] == n_ind, f"Phenotype (pheno) array length ({self.pheno.shape[0]}) must match number of individuals ({n_ind})."
+    #     assert self.fixEff.shape[0] == n_ind, f"Fixed effect (fixEff) array length ({self.fixEff.shape[0]}) must match number of individuals ({n_ind})."
+        
+    #     # Validate optional genetic value components
+    #     if self.bv is not None:
+    #         assert self.bv.shape[0] == n_ind, f"Breeding value (bv) array length ({self.bv.shape[0]}) must match number of individuals ({n_ind})."
+    #     if self.dd is not None:
+    #         assert self.dd.shape[0] == n_ind, f"Dominance deviation (dd) array length ({self.dd.shape[0]}) must match number of individuals ({n_ind})."
+    #     if self.aa is not None:
+    #         assert self.aa.shape[0] == n_ind, f"Epistatic deviation (aa) array length ({self.aa.shape[0]}) must match number of individuals ({n_ind})."
+    #     if self.ebv is not None:
+    #         assert self.ebv.shape[0] == n_ind, f"EBV array length ({self.ebv.shape[0]}) must match number of individuals ({n_ind})."
 
     @property
     def nInd(self) -> int:
@@ -134,31 +132,13 @@ class Population:
     def dosage(self) -> jnp.ndarray:
         """
         Calculates the dosage of alternate alleles for each individual.
-
-        The dosage is the sum of alleles across the ploidy dimension, resulting
-        in a 2D matrix where each entry represents the count of the alternate
-        allele at a specific locus for an individual.
-
-        Returns:
-            A JAX array of shape `(nInd, nLoci)`, where nLoci is the total
-            number of loci across all chromosomes.
         """
-        # Sum over the ploidy axis (axis=2) to get dosage per chromosome
-        # Shape: (nInd, nChr, nLoci_per_chr)
         dosage_per_chr = jnp.sum(self.geno, axis=2)
-
-        # Reshape to combine the chromosome and loci dimensions
-        # Shape: (nInd, nChr * nLoci_per_chr)
         return dosage_per_chr.reshape(self.nInd, -1)
     
-
     def plot_maf(self, genetic_map=None, maf_threshold=None):
         """
         Plot MAF distribution as a quick sanity check for the population.
-        
-        Args:
-            genetic_map: Optional genetic map to identify valid markers.
-            maf_threshold: Optional MAF threshold to highlight on plot.
         """
         import matplotlib.pyplot as plt
         
@@ -167,7 +147,6 @@ class Population:
         # Calculate MAF for each marker
         for chr_idx in range(self.nChr):
             for snp_idx in range(self.geno.shape[3]):
-                # Skip invalid markers
                 if genetic_map is not None and jnp.isnan(genetic_map[chr_idx, snp_idx]):
                     continue
                 
@@ -175,7 +154,6 @@ class Population:
                 if jnp.any(jnp.isnan(marker_genotypes)):
                     continue
                 
-                # Calculate MAF
                 allele_freq = float(jnp.mean(marker_genotypes))
                 maf = min(allele_freq, 1 - allele_freq)
                 maf_values.append(maf)
@@ -184,7 +162,6 @@ class Population:
             print("No valid markers found!")
             return
         
-        # Plot MAF distribution
         plt.figure(figsize=(8, 5))
         plt.hist(maf_values, bins=50, alpha=0.7, edgecolor='black')
         plt.xlabel('Minor Allele Frequency (MAF)')
@@ -196,24 +173,21 @@ class Population:
         
         if maf_threshold is not None:
             plt.axvline(maf_threshold, color='green', linestyle=':', 
-                    label=f'Threshold: {maf_threshold}')
+                        label=f'Threshold: {maf_threshold}')
         
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.show()
         
-        # Print summary
         fixed = sum(1 for maf in maf_values if maf == 0)
         print(f"Markers: {len(maf_values)} | Fixed: {fixed} | Mean MAF: {mean_maf:.3f}")
 
     def __repr__(self) -> str:
         """Provides a concise representation of the Population object."""
         return (f"Population(nInd={self.nInd}, nTraits={self.nTraits}, "
-                f"has_ebv={'Yes' if self.ebv is not None else 'No'})")    
+                f"has_ebv={'Yes' if self.ebv is not None else 'No'})")
 
-
-
-# %% ../nbs/01_population.ipynb 6
+# %% ../nbs/01_population.ipynb 7
 from typing import Tuple
 import jax
 import jax.numpy as jnp
@@ -308,7 +282,7 @@ def quick_haplo(
     
     return population, genetic_map
 
-# %% ../nbs/01_population.ipynb 8
+# %% ../nbs/01_population.ipynb 9
 def combine_populations(pop1, pop2, new_id_start=None):
     """Combine two populations into one, handling ID management and all array sizes"""
     if new_id_start is None:
@@ -379,7 +353,7 @@ def subset_population(pop: Population, indices: jnp.ndarray) -> Population:
 
 
 
-# %% ../nbs/01_population.ipynb 9
+# %% ../nbs/01_population.ipynb 10
 def msprime_pop(
     key: jax.random.PRNGKey,
     n_ind: int,
