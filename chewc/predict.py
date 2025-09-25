@@ -45,6 +45,8 @@ class PredictionResults:
 # %% ../nbs/07_predict.ipynb 5
 from functools import partial
 from typing import Optional, Dict, Tuple
+from jax.scipy.sparse.linalg import cg
+from jax import lax
 
 # ==================================================
 # --- Core Matrix Calculation Functions ---
