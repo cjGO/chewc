@@ -90,17 +90,17 @@ def calc_a_inverse_matrix_pedigree_jax(pop: Population) -> jnp.ndarray:
             return mat.at[i, i].add(val).at[d, d].add(0.25 * val).at[i, d].add(-0.5 * val).at[d, i].add(-0.5 * val)
 
         def case_3_both_known(mat):
-            d_ii = 1.0 - 0.25 * (mat[s, s] - 1.0 + mat[d, d] - 1.0) # Placeholder for inbreeding
-            val = 1.0 / d_ii
-            return (mat.at[i, i].add(val)
-                       .at[s, s].add(0.25 * val)
-                       .at[d, d].add(0.25 * val)
-                       .at[s, d].add(0.25 * val)
-                       .at[d, s].add(0.25 * val)
-                       .at[i, s].add(-0.5 * val)
-                       .at[s, i].add(-0.5 * val)
-                       .at[i, d].add(-0.5 * val)
-                       .at[d, i].add(-0.5 * val))
+            # The standard rules implicitly and correctly account for inbreeding.
+            # No 'val' or 'd_ii' calculation is needed.
+            return (mat.at[i, i].add(1.0)
+                    .at[s, s].add(0.25)
+                    .at[d, d].add(0.25)
+                    .at[s, d].add(0.25)
+                    .at[d, s].add(0.25)
+                    .at[i, s].add(-0.5)
+                    .at[s, i].add(-0.5)
+                    .at[i, d].add(-0.5)
+                    .at[d, i].add(-0.5))
 
         return lax.switch(case_index, [case_0_both_unknown, case_1_sire_known, case_2_dam_known, case_3_both_known], A_inv)
 

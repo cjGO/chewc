@@ -27,23 +27,54 @@ import jax
 import jax.numpy as jnp
 from fastcore.test import test_eq, test_ne
 
-# %% ../nbs/01_population.ipynb 6
-from dataclasses import field
-from typing import List, Optional, Dict, Callable, Any
-from flax.struct import dataclass as flax_dataclass, field
-import jax
-import jax.numpy as jnp
-from jax.core import Tracer  # <-- Import the JAX Tracer base class
-
-# ... other imports from your file (SimParam, msprime, etc.) ...
-
-@flax_dataclass(frozen=True)
+# %% ../nbs/01_population.ipynb 5
+@flax_dataclass(frozen=True) # Make the class immutable, a JAX best practice
 class Population:
     """
     A container for all data related to a population of individuals, designed
     for JAX-based genetic simulations.
+
     This structure is immutable. All operations that modify a population should
     return a new Population object.
+
+    Attributes:
+        geno (jnp.ndarray): A 4D array representing the genotypes of the population.
+            Shape: `(nInd, nChr, ploidy, nLoci)`. dtype: `jnp.uint8`.
+        idb (jnp.ndarray): A 4D array representing the founder origins of each allele of the population.
+            Shape: `(nInd, nChr, ploidy, nLoci)`. dtype: `jnp.uint8`.        id (jnp.ndarray): The primary, user-facing identifier for each individual.
+            These IDs may not be contiguous or sorted. Shape: `(nInd,)`.
+        iid (jnp.ndarray): The internal, zero-indexed, contiguous identifier.
+            Crucial for robust indexing in JAX operations. Shape: `(nInd,)`.
+        mother (jnp.ndarray): Array of internal IDs (`iid`) for the mother of each
+            individual. A value of -1 indicates no known mother. Shape: `(nInd,)`.
+        father (jnp.ndarray): Array of internal IDs (`iid`) for the father of each
+            individual. A value of -1 indicates no known father. Shape: `(nInd,)`.
+        sex (jnp.ndarray): The sex of each individual, represented numerically
+            (e.g., 0 for male, 1 for female). dtype: `jnp.int8`. Shape: `(nInd,)`.
+        gen (jnp.ndarray): The generation each individual is in, represented numerically
+             dtype: `jnp.int8`. Shape: `(nInd,)`.
+
+        pheno (jnp.ndarray): The phenotypic values for each individual.
+            Shape: `(nInd, nTraits)`.
+        fixEff (jnp.ndarray): The value of a fixed effect for each individual,
+            often used as an intercept in genomic selection models. Shape: `(nInd,)`.
+        
+        bv (Optional[jnp.ndarray]): The true breeding values (additive genetic effects)
+            for each individual. Shape: `(nInd, nTraits)`.
+        dd (Optional[jnp.ndarray]): The true dominance deviations for each individual.
+            Shape: `(nInd, nTraits)`.
+        aa (Optional[jnp.ndarray]): The true additive-by-additive epistatic deviations
+            for each individual. Shape: `(nInd, nTraits)`.
+
+        ebv (Optional[jnp.ndarray]): The estimated breeding values for each
+            individual. Shape: `(nInd, nTraits)`.
+        gxe (Optional[jnp.ndarray]): Genotype-by-environment interaction effects.
+            Shape depends on the specific GxE model.
+
+        misc (Dict): A dictionary for storing miscellaneous, non-JAX-critical
+            metadata about individuals. Static.
+        miscPop (Dict): A dictionary for storing miscellaneous, non-JAX-critical
+            metadata about the entire population. Static.
     """
     # --- Core Genotype Info ---
     geno: jnp.ndarray
@@ -187,7 +218,8 @@ class Population:
         return (f"Population(nInd={self.nInd}, nTraits={self.nTraits}, "
                 f"has_ebv={'Yes' if self.ebv is not None else 'No'})")
 
-# %% ../nbs/01_population.ipynb 7
+
+# %% ../nbs/01_population.ipynb 6
 from typing import Tuple
 import jax
 import jax.numpy as jnp
@@ -282,7 +314,8 @@ def quick_haplo(
     
     return population, genetic_map
 
-# %% ../nbs/01_population.ipynb 9
+
+# %% ../nbs/01_population.ipynb 8
 def combine_populations(pop1, pop2, new_id_start=None):
     """Combine two populations into one, handling ID management and all array sizes"""
     if new_id_start is None:
@@ -352,8 +385,7 @@ def subset_population(pop: Population, indices: jnp.ndarray) -> Population:
     )
 
 
-
-# %% ../nbs/01_population.ipynb 10
+# %% ../nbs/01_population.ipynb 9
 def msprime_pop(
     key: jax.random.PRNGKey,
     n_ind: int,
