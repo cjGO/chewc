@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 
 # Import functions and classes from other modules needed for testing
-from .population import quick_haplo
+from .popgen import quick_haplo
 from .sp import SimParam
 
 from typing import List, Optional

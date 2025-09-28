@@ -92,6 +92,10 @@ class Population:
     pheno: jnp.ndarray
     fixEff: jnp.ndarray
     
+    # --- JAX Compatibility ---
+    # Boolean mask to distinguish real vs. padded individuals
+    is_active: jnp.ndarray
+
     gv: Optional[jnp.ndarray] = None      # Genetic Value (BV + Intercept)
     bv: Optional[jnp.ndarray] = None      # Breeding Value (Additive)
     dd: Optional[jnp.ndarray] = None      # Dominance Deviations
@@ -103,6 +107,9 @@ class Population:
     # --- Metadata ---
     misc: Optional[Dict[str, Any]] = field(default=None, pytree_node=False)
     miscPop: Optional[Dict[str, Any]] = field(default=None, pytree_node=False)
+
+
+
 
     # def __post_init__(self):
     #     """Validates the consistency of the population data after initialization."""
@@ -139,13 +146,13 @@ class Population:
 
     @property
     def nInd(self) -> int:
-        """Returns the number of individuals in the population."""
-        return self.geno.shape[0]
-    
+        """Returns the number of ACTIVE individuals in the population."""
+        return jnp.sum(self.is_active)
+
     @property
-    def nChr(self) -> int:
-        """Returns the number of chromosomes in the population."""
-        return self.geno.shape[1]
+    def max_pop_size(self) -> int:
+        """Returns the maximum capacity of the population arrays."""
+        return self.geno.shape[0]
 
     @property
     def nTraits(self) -> int:
@@ -220,36 +227,64 @@ class Population:
 
 
 # %% ../nbs/01_population.ipynb 6
-def combine_populations(pop1, pop2, new_id_start=None):
-    """Combine two populations into one, handling ID management and all array sizes"""
-    if new_id_start is None:
-        new_id_start = jnp.max(pop1.id) + 1
+# chewc/population.py
+
+def combine_populations(pop1: Population, pop2: Population, max_pop_size: int) -> Population:
+    """
+    Combines two populations into a single, new padded population.
+    """
+    n1 = pop1.nInd
+    n2 = pop2.nInd
+    n_total = n1 + n2
+
+    if n_total > max_pop_size:
+        raise ValueError(f"Combined population size ({n_total}) exceeds max_pop_size ({max_pop_size}).")
+
+    # The new iids for pop2 start right after pop1's iids.
+    # Note: Parents in pop2's pedigree are still using old pop2 iids (0 to n2-1)
+    # We need to offset them by n1 to match their new position in the combined arrays.
+    pop2_mother_offset = jnp.where(pop2.mother != -1, pop2.mother + n1, -1)
+    pop2_father_offset = jnp.where(pop2.father != -1, pop2.father + n1, -1)
+
+    # --- FIX: Padding Logic ---
+    n_pad = max_pop_size - n_total
+
+    def pad(arr, val):
+        # Helper to pad the first axis of an array
+        pad_width = ((0, n_pad),) + ((0, 0),) * (arr.ndim - 1)
+        return jnp.pad(arr, pad_width, 'constant', constant_values=val)
+
+    # Combine active individuals' data
+    combined_geno = jnp.concatenate([pop1.geno[:n1], pop2.geno[:n2]])
+    combined_ibd = jnp.concatenate([pop1.ibd[:n1], pop2.ibd[:n2]])
+    combined_id = jnp.concatenate([pop1.id[:n1], pop2.id[:n2]])
+    combined_mother = jnp.concatenate([pop1.mother[:n1], pop2_mother_offset[:n2]])
+    combined_father = jnp.concatenate([pop1.father[:n1], pop2_father_offset[:n2]])
+    combined_sex = jnp.concatenate([pop1.sex[:n1], pop2.sex[:n2]])
+    combined_gen = jnp.concatenate([pop1.gen[:n1], pop2.gen[:n2]])
+    combined_pheno = jnp.concatenate([pop1.pheno[:n1], pop2.pheno[:n2]])
+    combined_fixEff = jnp.concatenate([pop1.fixEff[:n1], pop2.fixEff[:n2]])
+    combined_bv = jnp.concatenate([pop1.bv[:n1], pop2.bv[:n2]]) if pop1.bv is not None and pop2.bv is not None else None
     
-    # Update pop2 IDs to avoid conflicts
-    pop2_new_ids = jnp.arange(new_id_start, new_id_start + pop2.nInd)
-    
-    # Create combined population with proper array concatenation for ALL fields
-    combined_pop = Population(
-        geno=jnp.concatenate([pop1.geno, pop2.geno], axis=0),
-        ibd=jnp.concatenate([pop1.ibd, pop2.ibd], axis=0),  # ADDED: Handle IBD array
-        id=jnp.concatenate([pop1.id, pop2_new_ids]),
-        iid=jnp.arange(pop1.nInd + pop2.nInd),  # Reset internal IDs
-        mother=jnp.concatenate([pop1.mother, pop2.mother]),
-        father=jnp.concatenate([pop1.father, pop2.father]),
-        sex=jnp.concatenate([pop1.sex, pop2.sex]),
-        gen=jnp.concatenate([pop1.gen, pop2.gen]),
-        pheno=jnp.concatenate([pop1.pheno, pop2.pheno]),
-        fixEff=jnp.concatenate([pop1.fixEff, pop2.fixEff]),
-        bv=jnp.concatenate([pop1.bv, pop2.bv]) if pop1.bv is not None and pop2.bv is not None else None,
-        ebv=jnp.concatenate([pop1.ebv, pop2.ebv]) if pop1.ebv is not None and pop2.ebv is not None else None,
-        # Handle optional arrays
-        dd=jnp.concatenate([pop1.dd, pop2.dd]) if pop1.dd is not None and pop2.dd is not None else None,
-        aa=jnp.concatenate([pop1.aa, pop2.aa]) if pop1.aa is not None and pop2.aa is not None else None,
-        gv=jnp.concatenate([pop1.gv, pop2.gv]) if pop1.gv is not None and pop2.gv is not None else None,
-        gxe=jnp.concatenate([pop1.gxe, pop2.gxe]) if pop1.gxe is not None and pop2.gxe is not None else None
+    # --- NEW: Combine is_active masks ---
+    combined_is_active = jnp.concatenate([pop1.is_active[:n1], pop2.is_active[:n2]])
+
+    # Create the new Population object with padded arrays
+    return Population(
+        geno=pad(combined_geno, 0),
+        ibd=pad(combined_ibd, -1),
+        id=pad(combined_id, -1),
+        iid=jnp.arange(max_pop_size), # Always 0 to max_pop_size-1
+        mother=pad(combined_mother, -1),
+        father=pad(combined_father, -1),
+        sex=pad(combined_sex, -1),
+        gen=pad(combined_gen, -1),
+        is_active=pad(combined_is_active, False), # Pad with False
+        pheno=pad(combined_pheno, jnp.nan),
+        fixEff=pad(combined_fixEff, 0.),
+        bv=pad(combined_bv, jnp.nan) if combined_bv is not None else jnp.full((max_pop_size, 0), jnp.nan)
+        # Ensure optional fields are handled correctly
     )
-    
-    return combined_pop
 
 def subset_population(pop: Population, indices: jnp.ndarray) -> Population:
     """

@@ -9,7 +9,8 @@ __all__ = ['meiosis_for_one_cross']
 import jax
 import jax.numpy as jnp
 from .sp import SimParam
-from .population import quick_haplo, Population
+from .popgen import quick_haplo
+from .population import Population
 from .trait import add_trait_a, TraitCollection
 from .phenotype import set_pheno
 
@@ -20,7 +21,7 @@ import jax.numpy as jnp
 import numpy as np
 
 # --- Functions from other modules needed for testing ---
-from .population import Population, quick_haplo
+from .population import Population
 from .sp import SimParam
 
 from jax import lax, vmap

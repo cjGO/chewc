@@ -27,7 +27,6 @@ from .trait import TraitCollection       # <-- Import the TraitCollection class
 # %% ../nbs/04_phenotype.ipynb 4
 # chewc/phenotype.py
 
-
 @partial(jax.jit, static_argnames=('ploidy',))
 def _calculate_gvs(
     pop: Population,
@@ -35,22 +34,18 @@ def _calculate_gvs(
     ploidy: int
 ) -> tuple[Float[Array, "nInd nTraits"], Float[Array, "nInd nTraits"]]:
     """
-    (JIT-compiled) Calculates all genetic values using a single, 
-    highly-optimized matrix multiplication. 'ploidy' is a static argument
-    because it affects array shapes during compilation.
+    (JIT-compiled) Calculates all genetic values for the entire padded population.
+    'ploidy' is a static argument because it affects array shapes during compilation.
     """
-    # This logic is identical to your _calculate_gvs_vectorized_alternative
-    flat_geno_alleles = pop.geno.transpose((0, 1, 3, 2)).reshape(pop.nInd, -1, ploidy)
+    # --- FIX ---
+    # Use the static shape from the .geno array itself, not the dynamic pop.nInd.
+    n_ind_padded = pop.geno.shape[0]
+    flat_geno_alleles = pop.geno.transpose((0, 1, 3, 2)).reshape(n_ind_padded, -1, ploidy)
     qtl_alleles = flat_geno_alleles[:, traits.loci_loc, :]
     qtl_geno = jnp.sum(qtl_alleles, axis=2)
     all_bv = jnp.dot(qtl_geno, traits.add_eff.T)
     all_gvs = all_bv + traits.intercept
     return all_bv, all_gvs
-
-
-
-#| export
-# In chewc/phenotype.py, alongside set_pheno
 
 def set_bv(
     pop: Population,
@@ -59,12 +54,18 @@ def set_bv(
 ) -> Population:
     """
     Calculates and sets the true breeding values (bv) and genetic values (gv)
-    for a population based on its genotypes and a given trait architecture.
-    This function does NOT generate phenotypes or environmental noise.
+    for a population, respecting the padding for inactive individuals.
     """
-    # Call the pre-compiled JAX kernel
+    # Call the JIT-compiled kernel, which now operates on the full padded geno array
     bvs, gvs = _calculate_gvs(pop=pop, traits=traits, ploidy=ploidy)
-    return pop.replace(bv=bvs, gv=gvs)
+
+    # --- NEW: Masking ---
+    # Use the is_active mask to set values for padded individuals to NaN.
+    # This prevents them from being used in downstream calculations like selection.
+    final_bvs = jnp.where(pop.is_active[:, None], bvs, jnp.nan)
+    final_gvs = jnp.where(pop.is_active[:, None], gvs, jnp.nan)
+
+    return pop.replace(bv=final_bvs, gv=final_gvs)
 
 def set_pheno(
     key: jax.random.PRNGKey,
@@ -76,42 +77,46 @@ def set_pheno(
     cor_e: Optional[Float[Array, "nTraits nTraits"]] = None,
 ) -> Population:
     """
-    Sets phenotypes for a population based on its genetic values and
-    either a specified heritability (h2) or environmental variance (varE).
-
-    Exactly one of `h2` or `varE` must be provided.
+    Sets phenotypes for a population, handling padded arrays correctly.
+    Calculations are performed only on active individuals.
     """
-    # 1. --- Input Validation (Python Land) ---
+    # 1. --- Input Validation ---
     if (h2 is None and varE is None) or (h2 is not None and varE is not None):
         raise ValueError("Exactly one of 'h2' or 'varE' must be provided.")
 
+    n_traits = traits.n_traits if traits is not None else 0
+    if n_traits == 0:
+        return pop  # No traits to add phenotypes for
+
     if cor_e is None:
-        cor_e = jnp.identity(traits.n_traits)
+        cor_e = jnp.identity(n_traits)
 
     # 2. --- Core Genetic Calculation ---
-    # Call the pre-compiled JAX kernel for calculating genetic values
     bvs, gvs = _calculate_gvs(pop=pop, traits=traits, ploidy=ploidy)
 
-    # 3. --- Determine Environmental Variance (Python Land) ---
-    # This logic remains outside the JIT path as it involves data-dependent
-    # shape calculations that are fine to run on the CPU.
+    # 3. --- Determine Environmental Variance ---
     if h2 is not None:
-        var_g = jnp.var(gvs, axis=0)
-        # Add a small epsilon to prevent division by zero for traits with no variance
+        # Calculate variance ONLY on active individuals using the mask
+        gvs_active = jnp.where(pop.is_active[:, None], gvs, jnp.nan)
+        var_g = jnp.nanvar(gvs_active, axis=0)
         var_e = (var_g / (h2 + 1e-8)) - var_g
-        var_e = jnp.maximum(0, var_e) # Ensure variance is not negative
-    else: # varE is not None
+        var_e = jnp.maximum(0, var_e)
+    else:
         var_e = varE
 
     # 4. --- Add Environmental Noise ---
-    # Call the pre-compiled JAX kernel for adding noise
-    pheno = _add_environmental_noise(key=key, gvs=gvs, var_e=var_e, cor_e=cor_e)
+    # Temporarily replace NaNs in padded part with 0s to avoid NaN propagation
+    gvs_for_noise = jnp.nan_to_num(gvs, nan=0.0)
+    pheno_full = _add_environmental_noise(key=key, gvs=gvs_for_noise, var_e=var_e, cor_e=cor_e)
 
-    # 5. --- Update Population ---
-    return pop.replace(bv=bvs, gv=gvs, pheno=pheno)
+    # 5. --- Mask Final Arrays & Update Population ---
+    final_bvs = jnp.where(pop.is_active[:, None], bvs, jnp.nan)
+    final_gvs = jnp.where(pop.is_active[:, None], gvs, jnp.nan)
+    final_pheno = jnp.where(pop.is_active[:, None], pheno_full, jnp.nan)
 
+    return pop.replace(bv=final_bvs, gv=final_gvs, pheno=final_pheno)
 
-# %% ../nbs/04_phenotype.ipynb 5
+#| export
 @jax.jit
 def _add_environmental_noise(
     key: jax.random.PRNGKey,

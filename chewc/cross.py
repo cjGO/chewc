@@ -86,20 +86,6 @@ def make_cross(
 ) -> Population:
     """
     (Public-facing) Creates progeny from a planned series of crosses.
-
-    This function handles the "CPU-side" logic: preparing data from the main
-    Population object, calling the JIT-compiled core `_make_cross_geno`, and
-    then assembling the results into a new Population object with updated metadata.
-
-    Args:
-        key: A single JAX random key.
-        pop: The parent population.
-        cross_plan: A 2D array of shape (nCrosses, 2) with mother/father iids.
-        sp: The simulation parameters.
-        next_id_start: The starting integer for the new individuals' public IDs.
-
-    Returns:
-        A new Population object for the progeny.
     """
     n_crosses = cross_plan.shape[0]
     key_geno, key_sex = jax.random.split(key)
@@ -125,53 +111,30 @@ def make_cross(
     )
 
     # 3. Handle CPU-side logic: create new metadata and Population object
-    # --- FIX: Renamed `id` to `new_public_ids` to avoid shadowing the builtin ---
-    """
-    Patched version of make_cross with the arange fix and debug prints.
-    """
-    n_crosses = cross_plan.shape[0]
-    key_geno, key_sex = jax.random.split(key)
-
-    mother_iids = cross_plan[:, 0]
-    father_iids = cross_plan[:, 1]
-    mothers_geno = pop.geno[mother_iids]
-    fathers_geno = pop.geno[father_iids]
-    mothers_ibd = pop.ibd[mother_iids]
-    fathers_ibd = pop.ibd[father_iids]
-
-    # This call is already JIT-friendly
-    progeny_geno, progeny_ibd = _make_cross_geno(
-        key_geno, mothers_geno, fathers_geno, mothers_ibd, fathers_ibd,
-        sp.n_chr, sp.gen_map, sp.recomb_params[0]
-    )
-
-    # --- THE FIX ---
-    # Create an array of shape (n_crosses,) starting from 0. The length is static.
-    # Then, add the dynamic `next_id_start` value. JAX can trace this.
     new_public_ids = next_id_start + jnp.arange(n_crosses)
-    # --- END OF FIX ---
-    
     new_iids = jnp.arange(n_crosses)
     mother_public_ids = pop.id[mother_iids]
     father_public_ids = pop.id[father_iids]
+    # Get parent generation from the first mother (assuming all parents are from the same generation)
     parent_gen = pop.gen[mother_iids[0]]
     progeny_gen = parent_gen + 1
 
-    # --- LIBERAL DEBUGGING STATEMENTS ---
-    # debug.print("--- Inside make_cross_debug ---")
-    # debug.print("next_id_start: {}", next_id_start)
-    # debug.print("n_crosses: {}", n_crosses)
-    # debug.print("Shape of progeny_geno: {}", progeny_geno.shape)
-    # debug.print("Shape of new_public_ids: {}", new_public_ids.shape)
-    # debug.print("First 5 new_public_ids: {}", new_public_ids[:5])
-    
     progeny_pop = Population(
-        geno=progeny_geno, ibd=progeny_ibd, id=new_public_ids, iid=new_iids,
-        mother=mother_public_ids, father=father_public_ids,
+        geno=progeny_geno,
+        ibd=progeny_ibd,
+        id=new_public_ids,
+        iid=new_iids,
+        mother=mother_public_ids,
+        father=father_public_ids,
         sex=jax.random.choice(key_sex, jnp.array([0, 1], dtype=jnp.int8), (n_crosses,)),
         gen=jnp.full((n_crosses,), progeny_gen, dtype=jnp.int32),
-        pheno=jnp.zeros((n_crosses, sp.n_traits)),
+        # --- THE FIX ---
+        # New progeny are always active.
+        is_active=jnp.ones(n_crosses, dtype=bool),
+        # --- END OF FIX ---
+        pheno=jnp.full((n_crosses, sp.n_traits), jnp.nan),
         fixEff=jnp.zeros(n_crosses, dtype=jnp.float32),
-        bv=jnp.zeros((n_crosses, sp.n_traits))
+        bv=jnp.full((n_crosses, sp.n_traits), jnp.nan)
     )
     return progeny_pop
+
