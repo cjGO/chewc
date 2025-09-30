@@ -18,11 +18,12 @@ from fastcore.test import test_eq, test_close, test_fail
 import time
 
 # Import required chewc components
-from .population import Population, quick_haplo
+from .population import Population
+from .popgen import quick_haplo
 from .sp import SimParam
 from .trait import add_trait_a
 from .phenotype import set_pheno
-from .predict import gblup_predict
+# from chewc.predict import gblup_predict
 
 # %% ../nbs/08_select.ipynb 4
 class SelectionMethod:
