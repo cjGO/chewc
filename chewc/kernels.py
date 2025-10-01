@@ -14,8 +14,7 @@ from .config import SimConfig
 from .structs import Population, SimParam
 
 # %% ../nbs/05_kernels.ipynb 3
-@partial(jax.jit, static_argnames=('n_loci_per_chr',))
-def compute_dosage(geno, is_active, n_loci_per_chr):
+def compute_dosage(geno, is_active):
     """
     Computes dosage for all individuals, masking inactive ones.
     This is JIT-compatible because it preserves the array shape.
