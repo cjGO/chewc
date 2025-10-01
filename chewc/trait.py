@@ -34,13 +34,10 @@ from .kernels import compute_dosage
 class TraitCollection:
     """
     A collection of additive genetic traits.
-
-    This structure is JAX-compatible and holds all information needed to compute
-    genetic values from genotypes.
     """
-    loci_loc: jnp.ndarray  # Shape: (n_qtl,) - Indices of QTLs in the flattened genome
-    add_eff: jnp.ndarray   # Shape: (n_qtl, n_traits) - Additive effects for each QTL
-    intercept: jnp.ndarray # Shape: (n_traits,) - Intercept for each trait
+    loci_loc: jnp.ndarray  # Shape: (n_qtl,)
+    add_eff: jnp.ndarray   # Shape: (n_qtl, n_traits)
+    intercept: jnp.ndarray # Shape: (n_traits,)
 
     @property
     def n_traits(self) -> int:
@@ -58,24 +55,10 @@ def _calculate_gvs_from_dosage(
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Calculates genetic values from dosage using efficient matrix multiplication.
-    This kernel is JIT-compatible.
-
-    Args:
-        dosage: A (max_pop, n_total_loci) array of dosages.
-        traits: The TraitCollection object.
-
-    Returns:
-        A tuple of (breeding_values, genetic_values) with shapes (max_pop, n_traits).
     """
-    # Select the dosage only at the QTL locations
-    qtl_dosage = dosage[:, traits.loci_loc]  # Shape: (max_pop, n_qtl)
-
-    # Calculate breeding values (BV) with matrix multiplication
-    all_bv = qtl_dosage @ traits.add_eff  # (max_pop, n_qtl) @ (n_qtl, n_traits) -> (max_pop, n_traits)
-
-    # Calculate genetic values (GV) by adding the intercept
+    qtl_dosage = dosage[:, traits.loci_loc]
+    all_bv = qtl_dosage @ traits.add_eff
     all_gvs = all_bv + traits.intercept
-
     return all_bv, all_gvs
 
 
@@ -88,59 +71,39 @@ def set_pheno_h2(
 ) -> Population:
     """
     Computes and sets phenotypes based on a target heritability.
-
-    This function is JIT-compatible. It first calculates the genetic variance
-    within the active population, then derives the required environmental
-    variance (varE) to achieve the target heritability (h2 or H2), and finally
-    adds the environmental noise.
-
-    Args:
-        key: A JAX random key for environmental noise.
-        pop: The Population object.
-        sp: The SimParam object containing the TraitCollection.
-        h2: The target heritability (either narrow-sense h2 or broad-sense H2).
-            Can be a scalar or a JAX array of shape (n_traits,).
-        broad_sense: If True, uses total genetic variance (from gv) for H2.
-                     If False (default), uses additive genetic variance (from bv) for h2.
-
-    Returns:
-        A new Population object with updated `bv`, `gv`, and `pheno` arrays.
+    This function is now fully JIT-compatible.
     """
     if sp.traits is None:
         raise ValueError("SimParam object must have a TraitCollection to set phenotypes.")
 
-    # 1. Compute dosage and genetic values (BV and GV) for the whole population
     dosage = compute_dosage(pop.geno, pop.is_active)
     bv, gv = _calculate_gvs_from_dosage(dosage, sp.traits)
 
-    # 2. Calculate the genetic variance (varA or varG) of the *active* population
     active_mask = pop.is_active
-    if broad_sense:
-        # Broad-sense heritability (H2) uses total genetic variance (varG)
-        genetic_variance = jnp.var(gv[active_mask], axis=0)
-    else:
-        # Narrow-sense heritability (h2) uses additive variance (varA)
-        genetic_variance = jnp.var(bv[active_mask], axis=0)
 
-    # 3. Calculate the required environmental variance (varE)
-    # The formula is varE = varG * ((1 / H2) - 1) or varA * ((1 / h2) - 1)
-    # Add a small epsilon to avoid division by zero if h2 is 1.0
+    # --- FIX WAS HERE ---
+    # Boolean array indexing `gv[active_mask]` is not JIT-compatible because the
+    # output shape is not static.
+    # The idiomatic JAX way to compute a masked variance is to use the `where` argument.
+    # The mask must be broadcastable to the array's shape.
+    mask_for_traits = active_mask[:, None]
+
+    if broad_sense:
+        genetic_variance = jnp.var(gv, axis=0, where=mask_for_traits)
+    else:
+        genetic_variance = jnp.var(bv, axis=0, where=mask_for_traits)
+
     h2 = jnp.asarray(h2)
     var_e = genetic_variance * ((1 / (h2 + 1e-8)) - 1)
-
-    # Ensure var_e is not negative (can happen if h2 > 1)
     var_e = jnp.maximum(0, var_e)
 
-    # 4. Add environmental noise to get phenotypes
     environmental_noise = jax.random.normal(key, gv.shape) * jnp.sqrt(var_e)
     pheno = gv + environmental_noise
 
-    # 5. Mask results for inactive individuals
     bv = jnp.where(pop.is_active[:, None], bv, jnp.nan)
     gv = jnp.where(pop.is_active[:, None], gv, jnp.nan)
     pheno = jnp.where(pop.is_active[:, None], pheno, jnp.nan)
 
-    # 6. Return the updated population object
     return pop.replace(bv=bv, gv=gv, pheno=pheno)
 
 
@@ -151,42 +114,20 @@ def set_pheno(
     var_e: jnp.ndarray
 ) -> Population:
     """
-    Computes and sets the breeding values (BV), genetic values (GV), and
-    phenotypes (pheno) for a population.
-
-    This function is designed to be JIT-compatible and operates on the full,
-    fixed-shape arrays.
-
-    Args:
-        key: A JAX random key for environmental noise.
-        pop: The Population object.
-        sp: The SimParam object containing the TraitCollection.
-        var_e: The environmental variance for each trait, shape (n_traits,).
-
-    Returns:
-        A new Population object with updated `bv`, `gv`, and `pheno` arrays.
+    Computes and sets phenotypes with a fixed environmental variance.
     """
     if sp.traits is None:
         raise ValueError("SimParam object must have a TraitCollection to set phenotypes.")
 
-    # 1. Compute dosage for the entire population (JIT-compatible)
-    n_total_loci = pop.geno.shape[1] * pop.geno.shape[3]
     dosage = compute_dosage(pop.geno, pop.is_active)
-
-    # 2. Calculate genetic values (JIT-compatible)
     bv, gv = _calculate_gvs_from_dosage(dosage, sp.traits)
-
-    # 3. Add environmental noise to get phenotypes
     environmental_noise = jax.random.normal(key, gv.shape) * jnp.sqrt(var_e)
     pheno = gv + environmental_noise
 
-    # 4. Mask the results for inactive individuals
-    # This ensures that we don't carry forward stale values for padded individuals
     bv = jnp.where(pop.is_active[:, None], bv, jnp.nan)
     gv = jnp.where(pop.is_active[:, None], gv, jnp.nan)
     pheno = jnp.where(pop.is_active[:, None], pheno, jnp.nan)
 
-    # 5. Return the updated population object
     return pop.replace(bv=bv, gv=gv, pheno=pheno)
 
 
@@ -205,9 +146,8 @@ def add_trait_a(
 ) -> SimParam:
     """
     Adds one or more new additive traits to the simulation parameters.
-    This function is run on the host to configure the simulation.
+    This function is run on the host, so boolean indexing is fine here.
     """
-    # --- Input Validation ---
     n_loci_per_chr = sim_param.gen_map.shape[1]
     if n_qtl_per_chr > n_loci_per_chr:
         raise ValueError(
@@ -222,13 +162,11 @@ def add_trait_a(
 
     key, sample_key, qtl_key, sign_key = jax.random.split(key, 4)
 
-    # --- Select QTL Locations ---
     n_total_qtl = n_qtl_per_chr * sim_param.gen_map.shape[0]
     all_loci_indices = jnp.arange(sim_param.gen_map.size)
     qtl_loc = jax.random.choice(qtl_key, all_loci_indices, shape=(n_total_qtl,), replace=False)
     qtl_loc = jnp.sort(qtl_loc)
 
-    # --- Sample, Correlate, and Scale QTL Effects ---
     if gamma:
         gamma_effects = jax.random.gamma(sample_key, shape, shape=(n_total_qtl, n_traits))
         signs = jax.random.choice(sign_key, jnp.array([-1.0, 1.0]), shape=(n_total_qtl, n_traits))
@@ -239,29 +177,23 @@ def add_trait_a(
     cholesky_matrix = jnp.linalg.cholesky(cor_a)
     correlated_raw_effects = raw_effects @ cholesky_matrix.T
 
-    # --- Scale effects to match target variance and mean in the founder population ---
     temp_traits = TraitCollection(
         loci_loc=qtl_loc,
         add_eff=correlated_raw_effects,
         intercept=jnp.zeros(n_traits)
     )
 
-    # Use our JIT-compatible kernels to calculate initial values
-    n_total_loci = founder_pop.geno.shape[1] * founder_pop.geno.shape[3]
     founder_dosage = compute_dosage(founder_pop.geno, founder_pop.is_active)
     initial_bvs, initial_gvs = _calculate_gvs_from_dosage(founder_dosage, temp_traits)
 
-    # Mask to compute stats only on active founders
     active_mask = founder_pop.is_active
     initial_vars = jnp.var(initial_gvs[active_mask], axis=0)
     initial_means = jnp.mean(initial_bvs[active_mask], axis=0)
 
-    # Calculate scaling factors and final intercepts
     scaling_factors = jnp.sqrt(var / (initial_vars + 1e-8))
     final_intercepts = mean - (initial_means * scaling_factors)
     final_add_eff = correlated_raw_effects * scaling_factors
 
-    # --- Create the final TraitCollection ---
     trait_collection = TraitCollection(
         loci_loc=qtl_loc,
         add_eff=final_add_eff,
@@ -269,3 +201,5 @@ def add_trait_a(
     )
 
     return sim_param.replace(traits=trait_collection)
+
+
