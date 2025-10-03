@@ -4,62 +4,20 @@
 __all__ = ['create_founders']
 
 # %% ../nbs/02_popgen.ipynb 1
-# chewc/popgen.py
-from typing import Tuple
 import jax
 import jax.numpy as jnp
-from numpy.random import default_rng
-
-
-import msprime
-# Correctly import the Population structure from your new module
-from .structs import Population, SimParam, SimConfig
-
+from .config import StaticConfig, Population
 
 # %% ../nbs/02_popgen.ipynb 2
-# In your refactored chewc/popgen.py
-from typing import Tuple
-from .structs import Population # Import the NEW Population PyTree
-import jax
-import jax.numpy as jnp
-
-def create_founders(
-    key: jax.random.PRNGKey,
-    n_ind: int,
-    n_chr: int,
-    n_loci_per_chr: int,
-    ploidy: int = 2,
-    chr_len_cm: float = 100.0
-) -> Tuple[Population, jnp.ndarray]:
-    """
-    Creates a dense founder population and a corresponding genetic map.
-
-    Returns:
-        A tuple of (Population, genetic_map). The Population object is a lean
-        PyTree with no padding, and the genetic_map is a JAX array.
-    """
-    key_geno, _ = jax.random.split(key)
-
-    # 1. Generate dense genetic data
-    founder_geno = jax.random.randint(
-        key_geno, (n_ind, n_chr, ploidy, n_loci_per_chr), 0, 2, dtype=jnp.uint8
+def create_founders(key: jax.random.PRNGKey, s_config: StaticConfig, n_founders: int) -> Population:
+    geno = jax.random.randint(
+        key,
+        (n_founders, s_config.n_chr, s_config.ploidy, s_config.n_loci_per_chr),
+        0,
+        2,
+        dtype=jnp.int8,
     )
-
-    # 3. Create dense metadata
-    ids = jnp.arange(n_ind, dtype=jnp.int32)
-    mother_ids = jnp.full(n_ind, -1, dtype=jnp.int32)
-    father_ids = jnp.full(n_ind, -1, dtype=jnp.int32)
-    birth_gens = jnp.zeros(n_ind, dtype=jnp.int32)
-    founder_meta = jnp.stack([ids, mother_ids, father_ids, birth_gens], axis=-1)
-
-    # 4. Generate a uniform genetic map
-    loci_pos = jnp.linspace(0., chr_len_cm, n_loci_per_chr)
-    genetic_map = jnp.tile(loci_pos, (n_chr, 1))
-
-    # 5. Instantiate the Population PyTree and return with the map
-    population = Population(
-        geno=founder_geno,
-        meta=founder_meta
-    )
-
-    return population, genetic_map
+    ids = jnp.arange(n_founders, dtype=jnp.int32)[:, None]
+    parent_ids = jnp.full((n_founders, 2), -1, dtype=jnp.int32)
+    birth_gen = jnp.zeros((n_founders, 1), dtype=jnp.int32)
+    return Population(geno=geno, meta=jnp.hstack([ids, parent_ids, birth_gen]))
