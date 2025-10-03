@@ -32,7 +32,13 @@ def generation_step(carry, gen_idx: int, s_config: StaticConfig, h2: float):
 
     # Phenotype generation at target h2 (single trait assumed)
     pheno, bv, gv, genetic_variance_vec, var_e_vec = set_pheno_h2(
-        pheno_key, current_pop, d_config, h2, trait_index=0, broad_sense=False
+        pheno_key,
+        current_pop,
+        d_config,
+        h2,
+        n_loci_per_chr=s_config.n_loci_per_chr,
+        trait_index=0,
+        broad_sense=False,
     )
     # convenience: single-trait vectors
     y   = pheno.squeeze(-1)  # (N,)

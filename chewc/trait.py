@@ -41,7 +41,7 @@ def add_trait(
         effects = raw_effects
 
     # compute TBV in founders to scale to target var
-    founder_dosage = jnp.sum(founder_pop.geno, axis=2).astype(jnp.float32)  # (N, C, L)
+    founder_dosage = compute_dosage(founder_pop)  # (N, C, L)
     G_Q = founder_dosage[:, qtl_chromosome, qtl_position]                    # (N, Q)
     gvs = G_Q @ effects                                                      # (N, n_traits)
 
@@ -61,20 +61,29 @@ def compute_dosage(pop: Population) -> jnp.ndarray:
     return jnp.sum(pop.geno, axis=2).astype(jnp.float32)
 
 
-def gather_qtl_dosage(dosage: jnp.ndarray, trait: Trait) -> jnp.ndarray:
+def gather_qtl_dosage(
+    dosage: jnp.ndarray,
+    trait: Trait,
+    *,
+    n_loci_per_chr: int,
+) -> jnp.ndarray:
     # dosage: (N, C, L) -> (N, Q) at QTL positions
-    return dosage[:, trait.qtl_chromosome, trait.qtl_position]
+    N, C, L = dosage.shape
+    flat = dosage.reshape(N, C * L)
+    lin = trait.qtl_chromosome * n_loci_per_chr + trait.qtl_position
+    return jnp.take(flat, lin, axis=1)
 
 
 
 
-@partial(jax.jit, static_argnames=("trait_index", "broad_sense"))
+@partial(jax.jit, static_argnames=("n_loci_per_chr", "trait_index", "broad_sense"))
 def set_pheno_h2(
     key: jax.random.PRNGKey,
     pop: Population,
     d_config: DynamicConfig,
     h2: Union[float, jnp.ndarray],
     *,
+    n_loci_per_chr: int,
     trait_index: int = 0,
     broad_sense: bool = False,
     active_mask: Optional[jnp.ndarray] = None,  # (N,), optional
@@ -97,7 +106,7 @@ def set_pheno_h2(
     trait = d_config.traits[trait_index]
 
     # Gather QTL dosage: (N, Q)
-    G_Q = gather_qtl_dosage(dosage, trait)
+    G_Q = gather_qtl_dosage(dosage, trait, n_loci_per_chr=n_loci_per_chr)
 
     # BV/TBV: (N, n_traits)
     # (Q, n_traits) @ (N, Q) -> (N, n_traits) plus intercept broadcast
