@@ -79,11 +79,15 @@ class BreedingState:
     population: Population
     key: jax.Array
     generation: int
+    next_id: int # To ensure unique IDs for new individuals
+
 
 # %% ../nbs/02_structs.ipynb 2
 import jax
 import jax.numpy as jnp
 from typing import Tuple
+
+
 
 def quick_haplo(
     key: jax.Array,
@@ -91,77 +95,50 @@ def quick_haplo(
     n_chr: int,
     seg_sites: int,
     inbred: bool = False,
-    chr_length: float = 1.0
+    chr_length: float = 1.0,
 ) -> Tuple[Population, GeneticMap]:
-    """
-    Rapidly simulates founder haplotypes and a corresponding genetic map.
-
-    This function creates a population with random alleles (0/1) at a frequency of 0.5
-    and in linkage equilibrium. It also generates a simple, evenly-spaced genetic map.
-
-    Args:
-        key: The jax.random.PRNGKey.
-        n_ind: Number of individuals.
-        n_chr: Number of chromosomes.
-        seg_sites: Number of segregating sites per chromosome.
-        inbred: If True, individuals will be homozygous.
-        chr_length: The genetic length of each chromosome in Morgans. Defaults to 1.0.
-
-    Returns:
-        A tuple containing:
-          - A `Population` object for the founders.
-          - A `GeneticMap` object for the simulation.
-
-    Example:
-        >>> import jax
-        >>> from chewc.initialization import quick_haplo
-        ...
-        >>> key = jax.random.PRNGKey(42)
-        >>> founder_pop, genetic_map = quick_haplo(
-        ...     key=key,
-        ...     n_ind=10,
-        ...     n_chr=3,
-        ...     seg_sites=100
-        ... )
-        ...
-        >>> print(f"Genotype shape: {founder_pop.geno.shape}")
-        Genotype shape: (10, 3, 2, 100)
-        >>> print(f"Number of chromosomes in map: {len(genetic_map.locus_positions)}")
-        Number of chromosomes in map: 3
-        >>> print(f"Positions on Chr 1: {genetic_map.locus_positions[0].shape}")
-        Positions on Chr 1: (100,)
-    """
-    # --- Population Generation ---
+    """Create a simple founder population and a uniform genetic map."""
     if inbred:
-        haplotypes = jax.random.randint(key, (n_ind, n_chr, 1, seg_sites), 0, 2, dtype=jnp.int8)
+        haplotypes = jax.random.randint(
+            key, (n_ind, n_chr, 1, seg_sites), 0, 2, dtype=jnp.int8
+        )
         geno = jnp.broadcast_to(haplotypes, (n_ind, n_chr, 2, seg_sites))
     else:
-        geno = jax.random.randint(key, (n_ind, n_chr, 2, seg_sites), 0, 2, dtype=jnp.int8)
+        geno = jax.random.randint(
+            key, (n_ind, n_chr, 2, seg_sites), 0, 2, dtype=jnp.int8
+        )
 
+    # IBD labels: unique per haplotype across individuals
     ibd = jnp.broadcast_to(
         jnp.arange(n_ind * 2, dtype=jnp.int32).reshape(n_ind, 1, 2, 1),
-        (n_ind, n_chr, 2, seg_sites)
+        (n_ind, n_chr, 2, seg_sites),
     )
 
-    meta = jnp.stack([
-        jnp.arange(n_ind),
-        jnp.full((n_ind,), -1),
-        jnp.full((n_ind,), -1),
-        jnp.zeros(n_ind)],
-        axis=-1, dtype=jnp.int32
+    # Meta (int32 all the way, stack doesn't accept dtype= kwarg)
+    meta = jnp.stack(
+        [
+            jnp.arange(n_ind, dtype=jnp.int32),               # id
+            jnp.full((n_ind,), -1, dtype=jnp.int32),          # mother_id
+            jnp.full((n_ind,), -1, dtype=jnp.int32),          # father_id
+            jnp.zeros((n_ind,), dtype=jnp.int32),             # birth_gen
+        ],
+        axis=-1,
     )
+
     population = Population(geno=geno, ibd=ibd, meta=meta)
 
-    # --- Genetic Map Generation ---
+    # Genetic map: same number of loci per chromosome, uniform spacing
     chromosome_lengths = jnp.full((n_chr,), chr_length, dtype=jnp.float32)
-    locus_positions = [
-        jnp.linspace(0., chr_length, seg_sites) for _ in range(n_chr)
-    ]
+    locus_positions = jnp.stack(
+        [jnp.linspace(0.0, chr_length, seg_sites, dtype=jnp.float32) for _ in range(n_chr)],
+        axis=0,
+    )
     genetic_map = GeneticMap(
         chromosome_lengths=chromosome_lengths, locus_positions=locus_positions
     )
-
     return population, genetic_map
+
+
 
 # %% ../nbs/02_structs.ipynb 3
 import jax.numpy as jnp
@@ -186,74 +163,62 @@ def compute_dosage(population: Population) -> jnp.ndarray:
     return jnp.sum(population.geno, axis=2)
 
 
+def _flatten_gather_chr_locus(dosage_chr_locus: jnp.ndarray,
+                              chr_idx: jnp.ndarray,
+                              locus_idx: jnp.ndarray) -> jnp.ndarray:
+    """
+    dosage_chr_locus: (n_ind, n_chr, n_loci)
+    chr_idx, locus_idx: (n_qtl,)
+    returns: (n_ind, n_qtl) gathered pairwise along (chr,locus).
+    """
+    n_chr, n_loci = dosage_chr_locus.shape[1], dosage_chr_locus.shape[2]
+    flat = dosage_chr_locus.reshape(dosage_chr_locus.shape[0], n_chr * n_loci)
+    flat_ids = chr_idx * n_loci + locus_idx
+    return jnp.take(flat, flat_ids, axis=1)
+
+
+
+
+
 def add_trait(
     key: jax.Array,
     founder_pop: Population,
     n_qtl_per_chr: int,
-    mean: jnp.ndarray,
-    var: jnp.ndarray,
-    sigma: Optional[jnp.ndarray] = None,
+    mean: jnp.ndarray,   # (n_traits,)
+    var: jnp.ndarray,    # (n_traits,)
+    sigma: jnp.ndarray,  # (n_traits, n_traits) PSD
 ) -> Trait:
-    """
-    Creates a Trait architecture and scales its effects to a target
-    additive variance in the founder population.
-
-    Args:
-        key: The jax.random.PRNGKey for random number generation.
-        founder_pop: The founder `Population` object. This is used to
-            properly scale the genetic variance.
-        n_qtl_per_chr: The number of QTL to sample per chromosome.
-        mean: A 1D array for the target mean of each trait. Shape: (n_traits,).
-        var: A 1D array for the target additive genetic variance of each trait.
-             Shape: (n_traits,).
-        sigma: An optional covariance matrix for generating correlated trait effects.
-               Shape: (n_traits, n_traits).
-
-    Returns:
-        A `Trait` object with QTL effects scaled to the desired parameters.
-    """
+    """Sample QTLs and multi-trait effects with covariance `sigma`."""
     key, qtl_key, effect_key = jax.random.split(key, 3)
 
-    n_chr, _, n_loci_per_chr = founder_pop.geno.shape[1:]
-    n_total_qtl = n_qtl_per_chr * n_chr
+    n_chr = founder_pop.geno.shape[1]
+    n_loci_per_chr = founder_pop.geno.shape[3]
 
-    # 1. Randomly sample QTL locations from all available loci
-    all_loci_indices = jnp.arange(n_chr * n_loci_per_chr)
+    n_total_qtl = n_qtl_per_chr * n_chr
+    all_loci_indices = jnp.arange(n_chr * n_loci_per_chr, dtype=jnp.int32)
     qtl_loc_flat = jax.random.choice(
         qtl_key, all_loci_indices, (n_total_qtl,), replace=False
     )
-    # Convert flat indices to (chromosome, position) pairs
-    qtl_chromosome, qtl_position = jnp.divmod(
-        jnp.sort(qtl_loc_flat), n_loci_per_chr
-    )
+    qtl_chromosome, qtl_position = jnp.divmod(jnp.sort(qtl_loc_flat), n_loci_per_chr)
 
-    # 2. Generate raw QTL effects
-    n_traits = mean.shape[0]
-    raw_effects = jax.random.normal(effect_key, (n_total_qtl, n_traits))
-    if sigma is not None:
-        # Induce correlation between traits using Cholesky decomposition
-        cholesky_factor = jnp.linalg.cholesky(sigma)
-        effects = raw_effects @ cholesky_factor.T
-    else:
-        effects = raw_effects
+    n_traits = int(mean.shape[0])
+    raw_effects = jax.random.normal(effect_key, (n_total_qtl, n_traits), dtype=jnp.float32)
+    cholesky_factor = jnp.linalg.cholesky(sigma.astype(jnp.float32))  # (T, T)
+    effects = raw_effects @ cholesky_factor.T  # (n_qtl, T)
 
-    # 3. Scale effects to match target variance in the founder population
-    founder_dosage = compute_dosage(founder_pop)  # Shape: (N, C, L)
-    # Get dosage only at the sampled QTL locations
-    qtl_dosage = founder_dosage[:, qtl_chromosome, qtl_position]  # Shape: (N, Q)
-    
-    # Calculate genetic values (gvs) in the founders
-    gvs = qtl_dosage @ effects  # Shape: (N, n_traits)
+    # Use founders to scale effects to desired trait variances
+    founder_dosage = jnp.sum(founder_pop.geno, axis=2, dtype=jnp.int32)  # (n, chr, loci)
+    qtl_dosage = _flatten_gather_chr_locus(founder_dosage, qtl_chromosome, qtl_position).astype(jnp.float32)
+    gvs = qtl_dosage @ effects  # (n, T)
 
-    # Calculate the scaling factor and intercept to match target mean and var
-    # Adding a small epsilon to avoid division by zero if founders are identical
-    scale = jnp.sqrt(var / (jnp.var(gvs, axis=0) + 1e-8))
-    intercept = mean - jnp.mean(gvs, axis=0) * scale
-    final_effects = effects * scale
+    # Scale to hit target marginal variances
+    scale = jnp.sqrt(var.astype(jnp.float32) / (jnp.var(gvs, axis=0) + 1e-8))
+    intercept = mean.astype(jnp.float32) - jnp.mean(gvs, axis=0) * scale
+    final_effects = effects * scale  # (n_qtl, T)
 
     return Trait(
-        qtl_chromosome=qtl_chromosome,
-        qtl_position=qtl_position,
+        qtl_chromosome=qtl_chromosome.astype(jnp.int32),
+        qtl_position=qtl_position.astype(jnp.int32),
         qtl_effects=final_effects,
         intercept=intercept,
     )

@@ -12,90 +12,63 @@ from typing import Tuple
 from .structs import GeneticMap
 
 @partial(jax.jit, static_argnames=("max_crossovers",))
-def _sample_chiasmata(
-    key: jax.Array,
-    map_length: float,
-    interference_nu: float,
-    max_crossovers: int = 20
-) -> jax.Array:
-    """
-    Generates crossover positions along a chromosome using a Gamma process.
-    This models chiasma interference.
-    """
-    # Parameters for the Gamma distribution that models the distance between chiasmata
-    shape = interference_nu
-    scale = 1.0 / (2.0 * interference_nu)
-
-    def scan_body(carry, _):
-        key, last_pos = carry
-        key, subkey = jax.random.split(key)
-        distance = jax.random.gamma(subkey, shape) * scale
-        new_pos = last_pos + distance
-        return (key, new_pos), new_pos
-
-    key, initial_key = jax.random.split(key)
-    # Start sampling slightly before the chromosome to capture all events
-    initial_start_pos = jax.random.uniform(initial_key, minval=-10.0, maxval=0.0)
-    
-    _, crossover_positions = lax.scan(
-        scan_body, (key, initial_start_pos), None, length=max_crossovers
-    )
-    
-    # A crossover is valid only if it falls within the chromosome's genetic map
-    valid_mask = (crossover_positions > 0) & (crossover_positions < map_length)
-    # Use jnp.where to keep array size static, filling invalid spots with NaN
-    return jnp.where(valid_mask, crossover_positions, jnp.nan)
-
-@partial(jax.jit, static_argnames=("max_crossovers",))
-def _create_recombinant_chromosome(
-    key: jax.Array,
-    parent_chr_geno: jax.Array,    # Shape (2, n_loci)
-    parent_chr_ibd: jax.Array,     # Shape (2, n_loci)
-    locus_positions: jax.Array,  # Shape (n_loci,)
-    interference_nu: float,
-    max_crossovers: int = 20
-) -> Tuple[jax.Array, jax.Array]:
-    """Creates a single recombinant chromosome from a parent's two haplotypes."""
-    key, chiasma_key, hap_key = jax.random.split(key, 3)
-    
-    map_length = locus_positions[-1]
-    crossover_positions = _sample_chiasmata(chiasma_key, map_length, interference_nu, max_crossovers)
-    
-    # Find the locus index after each valid crossover
-    crossover_indices = jnp.searchsorted(locus_positions, crossover_positions)
-
-    # Randomly choose which parental haplotype (0 or 1) to start with
-    start_hap = jax.random.randint(hap_key, (), 0, 2)
-    
-    # This vectorized approach determines the haplotype choice for every locus at once
-    locus_segments = jnp.searchsorted(crossover_indices, jnp.arange(locus_positions.shape[0]), side='right')
-    haplotype_choice = (start_hap + locus_segments) % 2
-    
-    # Apply the same choice mask to both genotypes and IBD arrays
-    gamete_geno = jnp.where(haplotype_choice == 0, parent_chr_geno[0], parent_chr_geno[1])
-    gamete_ibd = jnp.where(haplotype_choice == 0, parent_chr_ibd[0], parent_chr_ibd[1])
-    
-    return gamete_geno, gamete_ibd
-
-@jax.jit
 def create_gamete(
     key: jax.Array,
-    parent_geno: jax.Array,  # Shape: (n_chr, 2, n_loci)
-    parent_ibd: jax.Array,   # Shape: (n_chr, 2, n_loci)
+    parent_geno: jax.Array,  # (n_chr, 2, n_loci)
+    parent_ibd: jax.Array,   # (n_chr, 2, n_loci)
     genetic_map: GeneticMap,
-    interference_nu: float = 4.0 # Common value for chi-squared model
-) -> Tuple[jax.Array, jax.Array]:
-    """
-    Creates a single gamete from a parent's full genotype and IBD.
-    """
-    chr_keys = jax.random.split(key, num=parent_geno.shape[0])
-    
-    # vmap applies the single-chromosome function to all chromosomes in parallel.
-    vmapped_recombine = jax.vmap(
-        _create_recombinant_chromosome, in_axes=(0, 0, 0, 0, None, None)
+    interference_nu: float,
+    max_crossovers: int,
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """Return a haploid gamete (geno, ibd) of shape (n_chr, n_loci)."""
+
+    def _sample_chiasmata(k: jax.Array, map_length: jnp.ndarray, nu: float, L: int):
+        """Renewal process with gamma-distributed inter-chiasma distances."""
+        shape, scale = nu, 1.0 / (2.0 * nu)
+
+        def body(carry, _):
+            kk, last_pos = carry
+            kk, sub = jax.random.split(kk)
+            step = jax.random.gamma(sub, shape) * scale
+            pos = last_pos + step
+            return (kk, pos), pos
+
+        k, start_k = jax.random.split(k)
+        start = jax.random.uniform(start_k, (), minval=-10.0, maxval=0.0)
+
+        (_, _), positions = lax.scan(body, (k, start), None, length=L)
+        valid = (positions > 0.0) & (positions < map_length)
+        sentinel = map_length + 1.0
+        # Keep shape static, sort to ensure monotonic positions
+        positions = jnp.where(valid, positions, sentinel)
+        positions = jnp.sort(positions)
+        return positions  # (L,)
+
+    def _recombine_chr(
+        k: jax.Array,
+        chr_geno: jnp.ndarray,   # (2, n_loci)
+        chr_ibd: jnp.ndarray,    # (2, n_loci)
+        loci_pos: jnp.ndarray,   # (n_loci,)
+        nu: float,
+        L: int,
+    ):
+        k_chiasma, k_hap = jax.random.split(k)
+        cross_pos = _sample_chiasmata(k_chiasma, loci_pos[-1], nu, L)         # (L,)
+        cross_idx = jnp.searchsorted(loci_pos, cross_pos, side="left")        # (L,)
+        # segments = number of crossovers <= each locus index
+        segments = jnp.searchsorted(cross_idx, jnp.arange(loci_pos.shape[0]), side="right")
+        start_hap = jax.random.randint(k_hap, (), 0, 2, dtype=jnp.int32)
+        hap_choice = (start_hap + segments) & 1  # 0/1 per locus
+
+        gam_geno = jnp.where(hap_choice == 0, chr_geno[0], chr_geno[1])  # (n_loci,)
+        gam_ibd  = jnp.where(hap_choice == 0, chr_ibd[0],  chr_ibd[1])   # (n_loci,)
+        return gam_geno, gam_ibd
+
+    n_chr = parent_geno.shape[0]
+    chr_keys = jax.random.split(key, num=n_chr)
+    vmapped = jax.vmap(_recombine_chr, in_axes=(0, 0, 0, 0, None, None))
+    gamete_geno, gamete_ibd = vmapped(
+        chr_keys, parent_geno, parent_ibd, genetic_map.locus_positions, interference_nu, max_crossovers
     )
-    
-    gamete_geno, gamete_ibd = vmapped_recombine(
-        chr_keys, parent_geno, parent_ibd, genetic_map.locus_positions, interference_nu
-    )
-    return gamete_geno, gamete_ibd
+    return gamete_geno, gamete_ibd  # (n_chr, n_loci), (n_chr, n_loci)
+

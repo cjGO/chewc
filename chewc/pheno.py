@@ -6,7 +6,7 @@ __all__ = ['compute_dosage', 'calculate_phenotypes']
 # %% ../nbs/04_phenotype.ipynb 1
 import jax
 import jax.numpy as jnp
-from .structs import Population, Trait
+from .structs import Population, Trait, _flatten_gather_chr_locus
 from typing import Tuple
 
 # compute_dosage remains the same...
@@ -15,45 +15,30 @@ def compute_dosage(population: Population) -> jnp.ndarray:
     """Computes allele dosage. Shape: (n_ind, n_chr, n_loci)"""
     return jnp.sum(population.geno, axis=2)
 
+
+
+
 @jax.jit
 def calculate_phenotypes(
     key: jax.Array,
     population: Population,
     trait: Trait,
-    heritability: jnp.ndarray  # Changed from float to jnp.ndarray
+    heritability: jnp.ndarray,  # (n_traits,)
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-    """
-    Calculates True Breeding Values (TBV) and Phenotypes for a given population.
-    This is a pure, JIT-compiled "physics" function.
+    """Return (phenotypes, true_breeding_values)."""
+    # Dosage per locus (0-2) as float
+    dosage = jnp.sum(population.geno, axis=2, dtype=jnp.int32)  # (n, chr, loci)
+    qtl_dosage = _flatten_gather_chr_locus(
+        dosage, trait.qtl_chromosome, trait.qtl_position
+    ).astype(jnp.float32)  # (n, n_qtl)
 
-    Args:
-        key: A `jax.random.PRNGKey` for adding environmental noise.
-        population: The `Population` object to phenotype.
-        trait: The `Trait` object defining the genetic architecture.
-        heritability: The target narrow-sense heritabilities (h^2).
-            Shape must be (n_traits,).
+    tbv = trait.intercept + qtl_dosage @ trait.qtl_effects  # (n, n_traits)
+    add_var = jnp.var(tbv, axis=0)  # (n_traits,)
 
-    Returns:
-        A tuple containing phenotypes and true_breeding_values.
-        Both arrays have the shape (n_individuals, n_traits).
-    """
-    dosage = compute_dosage(population)
-    qtl_dosage = dosage[:, trait.qtl_chromosome, trait.qtl_position]
-    true_breeding_values = trait.intercept + qtl_dosage @ trait.qtl_effects
-    
-    additive_variance = jnp.var(true_breeding_values, axis=0)
-    
-    # Clip heritability per-trait to avoid division by zero
-    h2 = jnp.clip(heritability, a_min=1e-8, a_max=1.0 - 1e-8)
-    
-    # This calculation now works element-wise for each trait automatically!
-    environmental_variance = additive_variance * ((1 / h2) - 1)
-    environmental_variance = jnp.maximum(0.0, environmental_variance)
+    h2 = jnp.clip(heritability.astype(jnp.float32), 1e-8, 1.0 - 1e-8)
+    env_var = jnp.maximum(0.0, add_var * ((1.0 / h2) - 1.0))
+    noise = jax.random.normal(key, tbv.shape)
+    phenotypes = tbv + noise * jnp.sqrt(env_var)
 
-    noise = jax.random.normal(key, true_breeding_values.shape)
-    environmental_effects = noise * jnp.sqrt(environmental_variance)
-    
-    phenotypes = true_breeding_values + environmental_effects
-    
-    return phenotypes, true_breeding_values
+    return phenotypes, tbv
 
