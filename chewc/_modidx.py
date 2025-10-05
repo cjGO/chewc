@@ -20,4 +20,5 @@ d = { 'settings': { 'branch': 'main',
                                'chewc.structs.add_trait': ('structs.html#add_trait', 'chewc/structs.py'),
                                'chewc.structs.compute_dosage': ('structs.html#compute_dosage', 'chewc/structs.py'),
                                'chewc.structs.quick_haplo': ('structs.html#quick_haplo', 'chewc/structs.py')},
-            'chewc.workflow': {}}}
+            'chewc.workflow': { 'chewc.workflow.run_simulation_cycles': ('wf.html#run_simulation_cycles', 'chewc/workflow.py'),
+                                'chewc.workflow.selection_step': ('wf.html#selection_step', 'chewc/workflow.py')}}}
