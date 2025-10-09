@@ -47,7 +47,7 @@ class Trait:
     Defines the genetic architecture of one or more traits.
 
     This structure holds the information linking genotypes to phenotypes,
-    based on an additive QTL model.
+    based on an additive and dominance QTL model.
 
     Attributes:
         qtl_chromosome (jnp.ndarray): Chromosome index for each QTL.
@@ -56,13 +56,17 @@ class Trait:
             Shape: (n_qtl,)
         qtl_effects (jnp.ndarray): The additive effect of each QTL on each trait.
             Shape: (n_qtl, n_traits)
+        qtl_dominance_effects (jnp.ndarray): The dominance effect of each QTL on each trait.
+            Shape: (n_qtl, n_traits)
         intercept (jnp.ndarray): The base value for each trait.
             Shape: (n_traits,)
     """
     qtl_chromosome: jnp.ndarray
     qtl_position: jnp.ndarray
     qtl_effects: jnp.ndarray
+    qtl_dominance_effects: jnp.ndarray
     intercept: jnp.ndarray
+
 
 @dataclass(frozen=True)
 class BreedingState:
@@ -184,42 +188,62 @@ def add_trait(
     key: jax.Array,
     founder_pop: Population,
     n_qtl_per_chr: int,
-    mean: jnp.ndarray,   # (n_traits,)
-    var: jnp.ndarray,    # (n_traits,)
-    sigma: jnp.ndarray,  # (n_traits, n_traits) PSD
+    mean: jnp.ndarray,      # (n_traits,)
+    var_a: jnp.ndarray,     # Additive variance (n_traits,)
+    var_d: jnp.ndarray,     # Dominance variance (n_traits,)
+    sigma: jnp.ndarray,     # (n_traits, n_traits) PSD
 ) -> Trait:
-    """Sample QTLs and multi-trait effects with covariance `sigma`."""
-    key, qtl_key, effect_key = jax.random.split(key, 3)
+    """Sample QTLs and multi-trait effects for both additive and dominance components."""
+    key, qtl_key, effect_key, dom_effect_key = jax.random.split(key, 4)
 
     n_chr = founder_pop.geno.shape[1]
     n_loci_per_chr = founder_pop.geno.shape[3]
-
+    n_traits = int(mean.shape[0])
     n_total_qtl = n_qtl_per_chr * n_chr
+
+    # --- 1. Sample QTL locations (same for additive and dominance) ---
     all_loci_indices = jnp.arange(n_chr * n_loci_per_chr, dtype=jnp.int32)
-    qtl_loc_flat = jax.random.choice(
-        qtl_key, all_loci_indices, (n_total_qtl,), replace=False
-    )
+    qtl_loc_flat = jax.random.choice(qtl_key, all_loci_indices, (n_total_qtl,), replace=False)
     qtl_chromosome, qtl_position = jnp.divmod(jnp.sort(qtl_loc_flat), n_loci_per_chr)
 
-    n_traits = int(mean.shape[0])
-    raw_effects = jax.random.normal(effect_key, (n_total_qtl, n_traits), dtype=jnp.float32)
-    cholesky_factor = jnp.linalg.cholesky(sigma.astype(jnp.float32))  # (T, T)
-    effects = raw_effects @ cholesky_factor.T  # (n_qtl, T)
+    # --- 2. Sample and correlate raw effects ---
+    cholesky_factor = jnp.linalg.cholesky(sigma.astype(jnp.float32))
+    
+    # Additive effects
+    raw_add_effects = jax.random.normal(effect_key, (n_total_qtl, n_traits), dtype=jnp.float32)
+    add_effects = raw_add_effects @ cholesky_factor.T
+    
+    # Dominance effects
+    raw_dom_effects = jax.random.normal(dom_effect_key, (n_total_qtl, n_traits), dtype=jnp.float32)
+    dom_effects = raw_dom_effects @ cholesky_factor.T
 
-    # Use founders to scale effects to desired trait variances
-    founder_dosage = jnp.sum(founder_pop.geno, axis=2, dtype=jnp.int32)  # (n, chr, loci)
-    qtl_dosage = _flatten_gather_chr_locus(founder_dosage, qtl_chromosome, qtl_position).astype(jnp.float32)
-    gvs = qtl_dosage @ effects  # (n, T)
+    # --- 3. Compute founder dosages and scale effects ---
+    founder_dosage_full = jnp.sum(founder_pop.geno, axis=2, dtype=jnp.int32)
+    qtl_dosage = _flatten_gather_chr_locus(founder_dosage_full, qtl_chromosome, qtl_position).astype(jnp.float32)
+    
+    # Scale additive effects
+    add_gvs = qtl_dosage @ add_effects
+    scale_a = jnp.sqrt(var_a.astype(jnp.float32) / (jnp.var(add_gvs, axis=0) + 1e-8))
+    final_add_effects = add_effects * scale_a
 
-    # Scale to hit target marginal variances
-    scale = jnp.sqrt(var.astype(jnp.float32) / (jnp.var(gvs, axis=0) + 1e-8))
-    intercept = mean.astype(jnp.float32) - jnp.mean(gvs, axis=0) * scale
-    final_effects = effects * scale  # (n_qtl, T)
+    # Scale dominance effects
+    # Dominance dosage is 1 for heterozygotes (additive dosage is 1), and 0 otherwise.
+    # This is a clean, vectorized way to compute it.
+    dominance_qtl_dosage = (qtl_dosage == 1).astype(jnp.float32)
+    dom_gvs = dominance_qtl_dosage @ dom_effects
+    scale_d = jnp.sqrt(var_d.astype(jnp.float32) / (jnp.var(dom_gvs, axis=0) + 1e-8))
+    final_dom_effects = dom_effects * scale_d
+    
+    # --- 4. Calculate intercept based on total genetic value ---
+    # The intercept should center the total genetic value (A + D) in the founder population.
+    total_gvs = (qtl_dosage @ final_add_effects) + (dominance_qtl_dosage @ final_dom_effects)
+    intercept = mean.astype(jnp.float32) - jnp.mean(total_gvs, axis=0)
 
     return Trait(
         qtl_chromosome=qtl_chromosome.astype(jnp.int32),
         qtl_position=qtl_position.astype(jnp.int32),
-        qtl_effects=final_effects,
+        qtl_effects=final_add_effects,
+        qtl_dominance_effects=final_dom_effects,
         intercept=intercept,
     )
 

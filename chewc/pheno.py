@@ -23,22 +23,42 @@ def calculate_phenotypes(
     key: jax.Array,
     population: Population,
     trait: Trait,
-    heritability: jnp.ndarray,  # (n_traits,)
+    heritability: jnp.ndarray,  # Narrow-sense h^2, shape: (n_traits,)
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-    """Return (phenotypes, true_breeding_values)."""
-    # Dosage per locus (0-2) as float
-    dosage = jnp.sum(population.geno, axis=2, dtype=jnp.int32)  # (n, chr, loci)
+    """
+    Return (phenotypes, true_breeding_values).
+    Calculates phenotypes by modeling G = A + D.
+    """
+    # --- 1. Get QTL dosages ---
+    dosage = jnp.sum(population.geno, axis=2, dtype=jnp.int32)
     qtl_dosage = _flatten_gather_chr_locus(
         dosage, trait.qtl_chromosome, trait.qtl_position
-    ).astype(jnp.float32)  # (n, n_qtl)
+    ).astype(jnp.float32)
 
-    tbv = trait.intercept + qtl_dosage @ trait.qtl_effects  # (n, n_traits)
-    add_var = jnp.var(tbv, axis=0)  # (n_traits,)
+    # --- 2. Calculate Genetic Components (A and D) ---
+    # True Breeding Value (A) is the purely additive component
+    true_breeding_value = qtl_dosage @ trait.qtl_effects
 
+    # Dominance Deviation Value (D)
+    dominance_dosage = (qtl_dosage == 1).astype(jnp.float32)
+    dominance_value = dominance_dosage @ trait.qtl_dominance_effects
+
+    # Total Genotypic Value (G = intercept + A + D)
+    genotypic_value = trait.intercept + true_breeding_value + dominance_value
+
+    # --- 3. Calculate Variance Components to derive Environmental Variance (VE) ---
+    add_var = jnp.var(true_breeding_value, axis=0)  # VA
+    dom_var = jnp.var(dominance_value, axis=0)      # VD
+
+    # Assuming narrow-sense heritability h^2 = VA / VP = VA / (VA + VD + VE)
+    # We can derive VE = (VA / h^2) - VA - VD
     h2 = jnp.clip(heritability.astype(jnp.float32), 1e-8, 1.0 - 1e-8)
-    env_var = jnp.maximum(0.0, add_var * ((1.0 / h2) - 1.0))
-    noise = jax.random.normal(key, tbv.shape)
-    phenotypes = tbv + noise * jnp.sqrt(env_var)
+    env_var = jnp.maximum(0.0, (add_var / h2) - add_var - dom_var)
 
-    return phenotypes, tbv
+    # --- 4. Generate Final Phenotypes ---
+    noise = jax.random.normal(key, genotypic_value.shape)
+    phenotypes = genotypic_value + noise * jnp.sqrt(env_var)
+
+    # Return phenotypes and the true breeding value (for selection and tracking gain)
+    return phenotypes, true_breeding_value
 
