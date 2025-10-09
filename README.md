@@ -38,6 +38,17 @@ Documentation can be found hosted on this GitHub
 [repository](https://github.com/cjGO/chewc)’s
 [pages](https://cjGO.github.io/chewc/).
 
+### Multi trait simulation example
+
+This code block sets up the simulation parameters, creates a founder
+population in linkage equilbrium across loci, and simulates 2 correlated
+traits.
+
+Then a single generation is simulated from the founder population and
+ABLUP and GBLUP models are fitted for the offspring.
+
+Both the breeding simulation and prediction models are running on JAX.
+
 ## How to use
 
 ``` python
@@ -72,7 +83,7 @@ if __name__ == "__main__":
     N_CHR, N_LOCI = 5, 1000
     SEED = 42
     N_TRAITS = 2
-    h2_trait1, h2_trait2 = 0.6, 0.4
+    h2_trait1, h2_trait2 = 0.5, 0.5
     genetic_corr = 0.5
     
     # --- Setup (Co)variance matrices ---
@@ -94,7 +105,7 @@ if __name__ == "__main__":
     
     trait_architecture = add_trait(
         key=trait_key, founder_pop=founder_pop, n_qtl_per_chr=50,
-        mean=jnp.array([100.0, 50.0]), var=jnp.array([var_g1, var_g2]), sigma=G0
+        mean=jnp.array([100.0, 50.0]), var_a=jnp.array([var_g1, var_g2]), var_d=jnp.array([0.0, 3.0]), sigma=G0
     )
     
     founder_phenotypes, founder_tbvs = calculate_phenotypes(
@@ -164,6 +175,7 @@ if __name__ == "__main__":
 
     print(f"\nABLUP Accuracy -> Trait 1: {acc_ablup_t1:.4f}, Trait 2: {acc_ablup_t2:.4f}")
     print(f"GBLUP Accuracy -> Trait 1: {acc_gblup_t1:.4f}, Trait 2: {acc_gblup_t2:.4f}")
+    print('Note: both traits have the same heritabilities; but trait 2 has strong dominance effects, lowering accuracy')
 
     print("\n{:<6} | {:>12} {:>12} | {:>12} {:>12} | {:>12} {:>12}".format(
         "ID", "TBV T1", "TBV T2", "ABLUP T1", "ABLUP T2", "GBLUP T1", "GBLUP T2"))
@@ -176,8 +188,6 @@ if __name__ == "__main__":
             offspring_gblup[i, 0], offspring_gblup[i, 1]
         ))
 ```
-
-    WARNING:2025-10-05 21:46:38,657:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
 
     --- Step 1-4: Simulating population and multi-trait phenotypes ---
     --- Population simulation complete ---
@@ -192,18 +202,19 @@ if __name__ == "__main__":
 
     --- Comparison of Results for Offspring ---
 
-    ABLUP Accuracy -> Trait 1: 0.8543, Trait 2: 0.7700
-    GBLUP Accuracy -> Trait 1: 0.8698, Trait 2: 0.7921
+    ABLUP Accuracy -> Trait 1: 0.7611, Trait 2: 0.5660
+    GBLUP Accuracy -> Trait 1: 0.8045, Trait 2: 0.5809
+    Note: both traits have the same heritabilities; but trait 2 has strong dominance effects, lowering accuracy
 
     ID     |       TBV T1       TBV T2 |     ABLUP T1     ABLUP T2 |     GBLUP T1     GBLUP T2
     ----------------------------------------------------------------------------------------
-    200    |      100.404       49.503 |        0.553        0.084 |       -0.161       -0.159
-    201    |      100.290       50.093 |        0.555       -0.027 |       -0.007       -0.264
-    202    |      101.150       49.840 |        1.583       -0.072 |        0.880       -0.544
-    203    |      101.378       51.181 |        1.408        1.215 |        1.029        1.119
-    204    |      101.706       50.899 |        2.025        0.482 |        1.320        0.208
-    205    |      100.324       51.051 |        0.901        0.416 |        0.252        0.376
-    206    |      101.566       51.119 |        1.710        1.178 |        1.126        1.120
-    207    |      102.442       51.413 |        2.247        1.499 |        1.764        1.698
-    208    |      100.763       50.410 |        0.962        0.261 |        0.384        0.035
-    209    |      100.294       49.225 |        0.533       -0.304 |       -0.191       -0.562
+    200    |        0.847        1.461 |        0.322        1.116 |       -0.352        0.364
+    201    |        1.682        2.124 |        0.722        0.735 |        0.215        0.453
+    202    |        2.488        1.058 |        1.688        1.321 |        1.163        1.017
+    203    |        2.594        1.706 |        0.780       -0.772 |        0.553       -1.136
+    204    |        2.269        0.813 |        1.850        1.366 |        1.186        1.020
+    205    |        2.632        1.291 |        1.492        1.700 |        0.939        0.960
+    206    |        2.682        2.317 |        1.919        2.742 |        1.315        2.362
+    207    |        3.482        2.645 |        2.379        3.829 |        1.891        3.462
+    208    |        1.728        1.467 |        0.913        0.271 |        0.322       -0.260
+    209    |        2.602        2.125 |        0.888        0.409 |        0.511        0.211
