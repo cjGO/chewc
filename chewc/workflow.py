@@ -156,7 +156,7 @@ if __name__ == "__main__":
     print("Step 2: Initializing trait architecture...")
     trait_architecture = add_trait(
         key=trait_key, founder_pop=founder_pop, n_qtl_per_chr=50,
-        mean=jnp.array([0.0]), var=jnp.array([1.0]),
+        mean=jnp.array([0.0]), var_a=jnp.array([1.0]), var_d=jnp.array([0.0]),
         sigma=jnp.array([[10.0]])
     )
     heritabilities = jnp.array([0.9])
