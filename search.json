@@ -1,0 +1,112 @@
+[
+  {
+    "objectID": "07_blup.html",
+    "href": "07_blup.html",
+    "title": "chewc",
+    "section": "",
+    "text": "source\n\nremap_pedigree\n\n remap_pedigree (full_pedigree:jax.Array)\n\nRemaps IDs and returns a NumPy array for the sparse builder.\n\nsource\n\n\nsolve_multi_trait_mme_iterative\n\n solve_multi_trait_mme_iterative (y:jax.Array,\n                                  relationship_matrix_inv:jax.experimental\n                                  .sparse.bcoo.BCOO, G0_inv:jax.Array,\n                                  R0_inv:jax.Array, n_traits:int)\n\nSolves a multi-trait MME using an iterative Conjugate Gradient solver.\n\nsource\n\n\nbuild_g_matrix\n\n build_g_matrix (geno:jax.Array)\n\nConstructs the Genomic Relationship Matrix (G).\n\nsource\n\n\nbuild_a_inverse_sparse\n\n build_a_inverse_sparse (pedigree_meta:numpy.ndarray)\n\nConstructs the inverse of the Numerator Relationship Matrix (A_inv) directly from a pedigree using the correct, numerically stable version of Henderson’s rules. Returns the matrix in JAX’s BCOO sparse format.",
+    "crumbs": [
+      "07_blup.html"
+    ]
+  },
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "chewc",
+    "section": "",
+    "text": "If you are new to using nbdev here are some useful pointers to get you started.\n\n\n# make sure chewc package is installed in development mode\n$ pip install -e .\n\n# make changes under nbs/ directory\n# ...\n\n# compile to have changes apply to chewc\n$ nbdev_prepare",
+    "crumbs": [
+      "chewc"
+    ]
+  },
+  {
+    "objectID": "index.html#developer-guide",
+    "href": "index.html#developer-guide",
+    "title": "chewc",
+    "section": "",
+    "text": "If you are new to using nbdev here are some useful pointers to get you started.\n\n\n# make sure chewc package is installed in development mode\n$ pip install -e .\n\n# make changes under nbs/ directory\n# ...\n\n# compile to have changes apply to chewc\n$ nbdev_prepare",
+    "crumbs": [
+      "chewc"
+    ]
+  },
+  {
+    "objectID": "index.html#usage",
+    "href": "index.html#usage",
+    "title": "chewc",
+    "section": "Usage",
+    "text": "Usage\n\nInstallation\nInstall latest from the GitHub repository:\n$ pip install git+https://github.com/cjGO/chewc.git\n\n\nDocumentation\nDocumentation can be found hosted on this GitHub repository’s pages.\n\n\nMulti trait simulation example\nThis code block sets up the simulation parameters, creates a founder population in linkage equilbrium across loci, and simulates 2 correlated traits.\nThen a single generation is simulated from the founder population and ABLUP and GBLUP models are fitted for the offspring.\nBoth the breeding simulation and prediction models are running on JAX.",
+    "crumbs": [
+      "chewc"
+    ]
+  },
+  {
+    "objectID": "index.html#how-to-use",
+    "href": "index.html#how-to-use",
+    "title": "chewc",
+    "section": "How to use",
+    "text": "How to use\n\nimport jax\nimport jax.numpy as jnp\nimport numpy as np\nfrom functools import partial\nfrom typing import Tuple\nfrom scipy.sparse import coo_matrix\n\n# JAX's iterative solver and sparse matrix format\nfrom jax.scipy.sparse.linalg import cg\nimport jax.experimental.sparse as jsparse\n\n# Assume the 'chewc' library is installed\nfrom chewc.structs import (\n    Population,\n    Trait,\n    GeneticMap,\n    quick_haplo,\n    add_trait\n)\nfrom chewc.pheno import calculate_phenotypes\nfrom chewc.select import select_top_k\nfrom chewc.cross import random_mating, cross_pair\nfrom chewc.blup import *\n\n\nif __name__ == \"__main__\":\n    # --- Parameters ---\n    N_FOUNDERS, N_SELECT, N_OFFSPRING = 200, 20, 200\n    N_CHR, N_LOCI = 5, 1000\n    SEED = 42\n    N_TRAITS = 2\n    h2_trait1, h2_trait2 = 0.5, 0.5\n    genetic_corr = 0.5\n    \n    # --- Setup (Co)variance matrices ---\n    var_g1, var_g2 = h2_trait1, h2_trait2\n    cov_g12 = genetic_corr * jnp.sqrt(var_g1 * var_g2)\n    G0 = jnp.array([[var_g1, cov_g12], [cov_g12, var_g2]])\n    \n    var_e1, var_e2 = 1 - h2_trait1, 1 - h2_trait2\n    R0 = jnp.diag(jnp.array([var_e1, var_e2]))\n    \n    G0_inv, R0_inv = jnp.linalg.inv(G0), jnp.linalg.inv(R0)\n\n    # --- Population Simulation ---\n    print(\"--- Step 1-4: Simulating population and multi-trait phenotypes ---\")\n    key = jax.random.PRNGKey(SEED)\n    key, pop_key, trait_key, pheno_key, mating_key, cross_key = jax.random.split(key, 6)\n    \n    founder_pop, genetic_map = quick_haplo(key=pop_key, n_ind=N_FOUNDERS, n_chr=N_CHR, seg_sites=N_LOCI)\n    \n    trait_architecture = add_trait(\n        key=trait_key, founder_pop=founder_pop, n_qtl_per_chr=50,\n        mean=jnp.array([100.0, 50.0]), var_a=jnp.array([var_g1, var_g2]), var_d=jnp.array([0.0, 3.0]), sigma=G0\n    )\n    \n    founder_phenotypes, founder_tbvs = calculate_phenotypes(\n        key=pheno_key, population=founder_pop, trait=trait_architecture,\n        heritability=jnp.array([h2_trait1, h2_trait2])\n    )\n    \n    selected_parents = select_top_k(founder_pop, founder_phenotypes[:, 0], k=N_SELECT)\n    pairings = random_mating(mating_key, n_parents=N_SELECT, n_crosses=N_OFFSPRING)\n    \n    vmapped_cross = jax.vmap(cross_pair, in_axes=(0, 0, 0, 0, 0, None, None))\n    offspring_keys = jax.random.split(cross_key, N_OFFSPRING)\n    offspring_geno, offspring_ibd = vmapped_cross(\n        offspring_keys, selected_parents.geno[pairings[:, 0]], selected_parents.geno[pairings[:, 1]],\n        selected_parents.ibd[pairings[:, 0]], selected_parents.ibd[pairings[:, 1]],\n        genetic_map, 10\n    )\n    \n    new_meta = jnp.stack([\n        jnp.arange(N_OFFSPRING) + N_FOUNDERS,\n        selected_parents.meta[pairings[:, 0], 0],\n        selected_parents.meta[pairings[:, 1], 0],\n        jnp.full((N_OFFSPRING,), 1),\n    ], axis=-1)\n    offspring_pop = Population(geno=offspring_geno, ibd=offspring_ibd, meta=new_meta)\n    \n    key, offspring_pheno_key = jax.random.split(key)\n    offspring_phenotypes, offspring_tbvs = calculate_phenotypes(\n        key=offspring_pheno_key, population=offspring_pop, trait=trait_architecture,\n        heritability=jnp.array([h2_trait1, h2_trait2])\n    )\n    \n    all_phenotypes = jnp.concatenate([founder_phenotypes, offspring_phenotypes], axis=0)\n    print(\"--- Population simulation complete ---\")\n\n    # --- ABLUP (Sparse, Iterative) ---\n    print(\"\\n--- Performing Multi-Trait ABLUP (Sparse Iterative) ---\")\n    full_pedigree = jnp.concatenate([founder_pop.meta, offspring_pop.meta], axis=0)\n    remapped_ped_np = remap_pedigree(full_pedigree)\n    \n    A_inv_sparse = build_a_inverse_sparse(remapped_ped_np)\n    ablup_ebvs = solve_multi_trait_mme_iterative(\n        all_phenotypes, A_inv_sparse, G0_inv, R0_inv, n_traits=N_TRAITS\n    )\n    print(\"ABLUP calculation complete.\")\n    \n    # --- GBLUP (Iterative) ---\n    print(\"\\n--- Performing Multi-Trait GBLUP (Iterative) ---\")\n    all_geno = jnp.concatenate([founder_pop.geno, offspring_pop.geno], axis=0)\n    G_matrix = build_g_matrix(all_geno)\n    G_inv = jnp.linalg.inv(G_matrix + jnp.identity(G_matrix.shape[0]) * 1e-4)\n    \n    gblup_gebvs = solve_multi_trait_mme_iterative(\n        all_phenotypes, G_inv, G0_inv, R0_inv, n_traits=N_TRAITS\n    )\n    print(\"GBLUP calculation complete.\")\n\n    # --- Compare Results ---\n    print(\"\\n--- Comparison of Results for Offspring ---\")\n    offspring_ablup = ablup_ebvs[N_FOUNDERS:]\n    offspring_gblup = gblup_gebvs[N_FOUNDERS:]\n\n    acc_ablup_t1 = jnp.corrcoef(offspring_tbvs[:, 0], offspring_ablup[:, 0])[0, 1]\n    acc_ablup_t2 = jnp.corrcoef(offspring_tbvs[:, 1], offspring_ablup[:, 1])[0, 1]\n    acc_gblup_t1 = jnp.corrcoef(offspring_tbvs[:, 0], offspring_gblup[:, 0])[0, 1]\n    acc_gblup_t2 = jnp.corrcoef(offspring_tbvs[:, 1], offspring_gblup[:, 1])[0, 1]\n\n    print(f\"\\nABLUP Accuracy -&gt; Trait 1: {acc_ablup_t1:.4f}, Trait 2: {acc_ablup_t2:.4f}\")\n    print(f\"GBLUP Accuracy -&gt; Trait 1: {acc_gblup_t1:.4f}, Trait 2: {acc_gblup_t2:.4f}\")\n    print('Note: both traits have the same heritabilities; but trait 2 has strong dominance effects, lowering accuracy')\n\n    print(\"\\n{:&lt;6} | {:&gt;12} {:&gt;12} | {:&gt;12} {:&gt;12} | {:&gt;12} {:&gt;12}\".format(\n        \"ID\", \"TBV T1\", \"TBV T2\", \"ABLUP T1\", \"ABLUP T2\", \"GBLUP T1\", \"GBLUP T2\"))\n    print(\"-\" * 88)\n    for i in range(10):\n        print(\"{:&lt;6} | {:&gt;12.3f} {:&gt;12.3f} | {:&gt;12.3f} {:&gt;12.3f} | {:&gt;12.3f} {:&gt;12.3f}\".format(\n            int(offspring_pop.meta[i, 0]),\n            offspring_tbvs[i, 0], offspring_tbvs[i, 1],\n            offspring_ablup[i, 0], offspring_ablup[i, 1],\n            offspring_gblup[i, 0], offspring_gblup[i, 1]\n        ))\n\n--- Step 1-4: Simulating population and multi-trait phenotypes ---\n--- Population simulation complete ---\n\n--- Performing Multi-Trait ABLUP (Sparse Iterative) ---\n[DEBUG] Sparse A_inv successfully created with 1406 non-zero elements.\n[DEBUG] First 5 data points of A_inv: [1. 1. 1. 1. 1.]\nABLUP calculation complete.\n\n--- Performing Multi-Trait GBLUP (Iterative) ---\nGBLUP calculation complete.\n\n--- Comparison of Results for Offspring ---\n\nABLUP Accuracy -&gt; Trait 1: 0.7611, Trait 2: 0.5660\nGBLUP Accuracy -&gt; Trait 1: 0.8045, Trait 2: 0.5809\nNote: both traits have the same heritabilities; but trait 2 has strong dominance effects, lowering accuracy\n\nID     |       TBV T1       TBV T2 |     ABLUP T1     ABLUP T2 |     GBLUP T1     GBLUP T2\n----------------------------------------------------------------------------------------\n200    |        0.847        1.461 |        0.322        1.116 |       -0.352        0.364\n201    |        1.682        2.124 |        0.722        0.735 |        0.215        0.453\n202    |        2.488        1.058 |        1.688        1.321 |        1.163        1.017\n203    |        2.594        1.706 |        0.780       -0.772 |        0.553       -1.136\n204    |        2.269        0.813 |        1.850        1.366 |        1.186        1.020\n205    |        2.632        1.291 |        1.492        1.700 |        0.939        0.960\n206    |        2.682        2.317 |        1.919        2.742 |        1.315        2.362\n207    |        3.482        2.645 |        2.379        3.829 |        1.891        3.462\n208    |        1.728        1.467 |        0.913        0.271 |        0.322       -0.260\n209    |        2.602        2.125 |        0.888        0.409 |        0.511        0.211",
+    "crumbs": [
+      "chewc"
+    ]
+  },
+  {
+    "objectID": "04_phenotype.html",
+    "href": "04_phenotype.html",
+    "title": "chewc",
+    "section": "",
+    "text": "source\n\ncalculate_phenotypes\n\n calculate_phenotypes (key:jax.Array, population:chewc.structs.Population,\n                       trait:chewc.structs.Trait, heritability:jax.Array)\n\nReturn (phenotypes, true_breeding_values). Calculates phenotypes by modeling G = A + D.\n\n\n\n\nType\nDetails\n\n\n\n\nkey\nArray\n\n\n\npopulation\nPopulation\n\n\n\ntrait\nTrait\n\n\n\nheritability\nArray\nNarrow-sense h^2, shape: (n_traits,)\n\n\nReturns\nTuple\n\n\n\n\n\nsource\n\n\ncompute_dosage\n\n compute_dosage (population:chewc.structs.Population)\n\nComputes allele dosage. Shape: (n_ind, n_chr, n_loci)",
+    "crumbs": [
+      "04_phenotype.html"
+    ]
+  },
+  {
+    "objectID": "000_wf.html",
+    "href": "000_wf.html",
+    "title": "chewc",
+    "section": "",
+    "text": "source\n\nrun_simulation_cycles\n\n run_simulation_cycles (initial_state:chewc.structs.BreedingState,\n                        trait:chewc.structs.Trait,\n                        genetic_map:chewc.structs.GeneticMap,\n                        heritabilities:jax.Array, n_cycles:int,\n                        n_select:int, n_offspring:int, max_crossovers:int)\n\nRuns the entire multi-cycle simulation using lax.scan for maximum performance.\n\nsource\n\n\nselection_step\n\n selection_step (carry:chewc.structs.BreedingState, _,\n                 trait:chewc.structs.Trait,\n                 genetic_map:chewc.structs.GeneticMap,\n                 heritabilities:jax.Array, n_select:int, n_offspring:int,\n                 max_crossovers:int)\n\nExecutes one full cycle of selection and breeding. This function is designed to be the body of a lax.scan loop.\n\n\n\n\nType\nDetails\n\n\n\n\ncarry\nBreedingState\n\n\n\n_\n\nPlaceholder for lax.scan’s iteration number\n\n\ntrait\nTrait\n\n\n\ngenetic_map\nGeneticMap\n\n\n\nheritabilities\nArray\n\n\n\nn_select\nint\n\n\n\nn_offspring\nint\n\n\n\nmax_crossovers\nint\n\n\n\nReturns\nTuple",
+    "crumbs": [
+      "000_wf.html"
+    ]
+  },
+  {
+    "objectID": "03_meiosis.html",
+    "href": "03_meiosis.html",
+    "title": "chewc",
+    "section": "",
+    "text": "source\n\ncreate_gamete\n\n create_gamete (key:jax.Array, parent_geno:jax.Array,\n                parent_ibd:jax.Array,\n                genetic_map:chewc.structs.GeneticMap,\n                interference_nu:float, max_crossovers:int)\n\nReturn a haploid gamete (geno, ibd) of shape (n_chr, n_loci).\n\n\n\n\nType\nDetails\n\n\n\n\nkey\nArray\n\n\n\nparent_geno\nArray\n(n_chr, 2, n_loci)\n\n\nparent_ibd\nArray\n(n_chr, 2, n_loci)\n\n\ngenetic_map\nGeneticMap\n\n\n\ninterference_nu\nfloat\n\n\n\nmax_crossovers\nint\n\n\n\nReturns\nTuple",
+    "crumbs": [
+      "03_meiosis.html"
+    ]
+  },
+  {
+    "objectID": "06_cross.html",
+    "href": "06_cross.html",
+    "title": "chewc",
+    "section": "",
+    "text": "source\n\ncreate_ocs_mating_plan\n\n create_ocs_mating_plan (key:jax.Array, candidate_ids:jax.Array,\n                         contributions:jax.Array, n_crosses:int,\n                         allow_selfing:bool=False)\n\nGenerates a mating list based on optimal contribution scores for unisex populations.\n\nsource\n\n\ncross_pair\n\n cross_pair (key:jax.Array, mother_geno:jax.Array, father_geno:jax.Array,\n             mother_ibd:jax.Array, father_ibd:jax.Array,\n             genetic_map:chewc.structs.GeneticMap, max_crossovers:int)\n\n\n\n\n\nType\nDetails\n\n\n\n\nkey\nArray\n\n\n\nmother_geno\nArray\n\n\n\nfather_geno\nArray\n(n_chr, 2, n_loci)\n\n\nmother_ibd\nArray\n\n\n\nfather_ibd\nArray\n(n_chr, 2, n_loci)\n\n\ngenetic_map\nGeneticMap\n\n\n\nmax_crossovers\nint\n\n\n\nReturns\nTuple\n\n\n\n\n\nsource\n\n\nrandom_mating\n\n random_mating (key:jax.Array, n_parents:int, n_crosses:int)\n\nSample (mother, father) pairs with replacement. Works even when n_parents is not a Python literal.",
+    "crumbs": [
+      "06_cross.html"
+    ]
+  },
+  {
+    "objectID": "02_structs.html",
+    "href": "02_structs.html",
+    "title": "chewc",
+    "section": "",
+    "text": "source\n\nBreedingState\n\n BreedingState (population:__main__.Population, key:jax.Array,\n                generation:int, next_id:int)\n\n*The complete, self-contained state of a single simulation replicate at a point in time.\nThis object is the primary carrier passed between steps in the simulation.\nAttributes: population (Population): The current population of individuals. key (jax.Array): The JAX pseudo-random number generator key. generation (int): The current generation number of the simulation.*\n\nsource\n\n\nTrait\n\n Trait (qtl_chromosome:jax.Array, qtl_position:jax.Array,\n        qtl_effects:jax.Array, qtl_dominance_effects:jax.Array,\n        intercept:jax.Array)\n\n*Defines the genetic architecture of one or more traits.\nThis structure holds the information linking genotypes to phenotypes, based on an additive and dominance QTL model.\nAttributes: qtl_chromosome (jnp.ndarray): Chromosome index for each QTL. Shape: (n_qtl,) qtl_position (jnp.ndarray): Locus index for each QTL within its chromosome. Shape: (n_qtl,) qtl_effects (jnp.ndarray): The additive effect of each QTL on each trait. Shape: (n_qtl, n_traits) qtl_dominance_effects (jnp.ndarray): The dominance effect of each QTL on each trait. Shape: (n_qtl, n_traits) intercept (jnp.ndarray): The base value for each trait. Shape: (n_traits,)*\n\nsource\n\n\nPopulation\n\n Population (geno:jax.Array, ibd:jax.Array, meta:jax.Array)\n\n*Represents a collection of individuals within a breeding program.\nAttributes: geno (jnp.ndarray): Genotypes. Shape: (n_individuals, n_chr, 2, n_loci) ibd (jnp.ndarray): Identity-by-descent tracking for founder alleles. Shape: (n_individuals, n_chr, 2, n_loci) meta (jnp.ndarray): Metadata [id, mother_id, father_id, birth_gen]. Shape: (n_individuals, 4)*\n\nsource\n\n\nGeneticMap\n\n GeneticMap (chromosome_lengths:jax.Array,\n             locus_positions:List[jax.Array])\n\n*Defines the genetic map of the organism.\nAttributes: chromosome_lengths (jnp.ndarray): The genetic length of each chromosome in Morgans. Shape: (n_chr,) locus_positions (List[jnp.ndarray]): A list where each element is a JAX array containing the Morgan positions of loci for a single chromosome.*\n\nsource\n\n\nquick_haplo\n\n quick_haplo (key:jax.Array, n_ind:int, n_chr:int, seg_sites:int,\n              inbred:bool=False, chr_length:float=1.0)\n\nCreate a simple founder population and a uniform genetic map.\n\nsource\n\n\nadd_trait\n\n add_trait (key:jax.Array, founder_pop:__main__.Population,\n            n_qtl_per_chr:int, mean:jax.Array, var_a:jax.Array,\n            var_d:jax.Array, sigma:jax.Array)\n\nSample QTLs and multi-trait effects for both additive and dominance components.\n\n\n\n\nType\nDetails\n\n\n\n\nkey\nArray\n\n\n\nfounder_pop\nPopulation\n\n\n\nn_qtl_per_chr\nint\n\n\n\nmean\nArray\n(n_traits,)\n\n\nvar_a\nArray\nAdditive variance (n_traits,)\n\n\nvar_d\nArray\nDominance variance (n_traits,)\n\n\nsigma\nArray\n(n_traits, n_traits) PSD\n\n\nReturns\nTrait\n\n\n\n\n\nsource\n\n\ncompute_dosage\n\n compute_dosage (population:__main__.Population)\n\n*Computes the dosage of the ‘1’ allele for each individual at each locus.\nDosage is calculated as the sum of alleles across the two homologous chromosomes, resulting in values of 0, 1, or 2.\nArgs: population: A Population object.\nReturns: A 3D array of dosages with shape (n_individuals, n_chr, n_loci).*\n\nkey = jax.random.PRNGKey(42)\nfounder_pop = quick_haplo(\nkey=key,\nn_ind=10,\nn_chr=3,\nseg_sites=100,\ninbred=False\n )\n\nWARNING:2025-10-04 20:20:06,008:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.",
+    "crumbs": [
+      "02_structs.html"
+    ]
+  },
+  {
+    "objectID": "05_select.html",
+    "href": "05_select.html",
+    "title": "chewc",
+    "section": "",
+    "text": "source\n\nselect_with_ocs\n\n select_with_ocs (population:chewc.structs.Population,\n                  breeding_values:jax.Array, delta_F:float, k:int)\n\nSelects top-k individuals and calculates their optimal contributions.\n\nsource\n\n\nfind_optimal_contributions\n\n find_optimal_contributions (g:jax.Array, A:jax.Array, delta_F:float,\n                             start_lambda:float=1.0,\n                             tolerance:float=1e-06,\n                             max_iterations:int=100)\n\nJIT-compiled function using jax.lax.while_loop to find optimal contributions.\n\nsource\n\n\nselect_top_k\n\n select_top_k (population:chewc.structs.Population, values:jax.Array,\n               k:int)\n\nSelect top-k individuals by values (1-D).",
+    "crumbs": [
+      "05_select.html"
+    ]
+  }
+]
