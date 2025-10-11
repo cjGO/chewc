@@ -1,6 +1,8 @@
 _docs/
 _proc/
 
+./Stoix
+/Stoix
 *.bak
 .gitattributes
 .last_checked
