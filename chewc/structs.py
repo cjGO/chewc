@@ -144,148 +144,171 @@ def quick_haplo(
 
 #| export
 
+#| export
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+from numpy.random import default_rng
+import msprime
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from typing import Optional, Tuple
+from IPython.display import display
+
+
+
 def msprime_pop(
-    key: jax.random.PRNGKey,
+    key: jax.Array,
     n_ind: int,
-    n_loci_per_chr: int,
     n_chr: int,
-    max_pop_size: int,
+    n_loci_per_chr: int,
     ploidy: int = 2,
-    effective_population_size: int = 10_000,
-    mutation_rate: float = 2e-8,
-    recombination_rate_per_chr: float = 2e-8,
-    maf_threshold: float = 0.1,
-    num_simulated_individuals: int = None,
-    base_chr_length: int = 1_000_000,
-    enforce_founder_maf: bool = True
-) -> Tuple[Population, jnp.ndarray]:
-    """
-    Creates a new, padded founder population using msprime coalescent simulation.
+    effective_population_size: int = 15_000,
+    mutation_rate: float = 1e-7,
+    recombination_rate_per_chr: float = 1e-8,
+    maf_threshold: float = 0.05,
+    base_chr_length: int = 500_000,
+    num_simulated_individuals: Optional[int] = None,
+    enforce_founder_maf: bool = True,
+) -> Tuple[Population, GeneticMap]:
+    """Simulate a founder population from an msprime ancestry model.
 
-    Args:
-        key: JAX random key.
-        n_ind: Number of founder individuals to generate.
-        n_loci_per_chr: Number of SNPs (loci) to select per chromosome.
-        n_chr: Number of chromosomes.
-        max_pop_size: The total size of the arrays to pre-allocate for JAX compatibility.
-        ... (other args remain the same) ...
-
-    Returns:
-        A tuple containing:
-        - A new Population object with `n_ind` active founders in padded arrays of size `max_pop_size`.
-        - A JAX array representing the genetic map.
+    The output matches the lightweight `Population`/`GeneticMap` structures used by the
+    workflow notebooks so it can plug straight into trait sampling, phenotype simulation,
+    and selection routines.
     """
-    # --- Parameter Validation ---
-    if n_ind > max_pop_size:
-        raise ValueError(f"Number of founders ({n_ind}) cannot exceed max_pop_size ({max_pop_size}).")
-        
-    if effective_population_size > 100_000:
-        raise ValueError(f"Effective population size {effective_population_size} is very large and may cause memory issues.")
     
+    # [JAX-linear Fix]: Added required imports
+    import msprime
+    import numpy as np
+    from numpy.random import default_rng
+
+    if n_ind <= 0:
+        raise ValueError('n_ind must be positive.')
+    if n_chr <= 0:
+        raise ValueError('n_chr must be positive.')
+    if n_loci_per_chr <= 0:
+        raise ValueError('n_loci_per_chr must be positive.')
+
     if num_simulated_individuals is None:
         multiplier = 5 if enforce_founder_maf else 2
-        num_simulated_individuals = min(max(n_ind * multiplier, 1000), 10_000)
-        
-    if n_ind > num_simulated_individuals:
-        raise ValueError(f"Number of founders requested ({n_ind}) cannot exceed the base simulated population size ({num_simulated_individuals}).")
+        num_simulated_individuals = max(n_ind * multiplier, 2 * n_ind)
+    if num_simulated_individuals < n_ind:
+        raise ValueError('num_simulated_individuals must be >= n_ind.')
 
-    # --- Simulation Setup (Unchanged) ---
-    key, seed_key, sex_key, numpy_seed_key = jax.random.split(key, 4)
-    random_seed = int(jnp.sum(seed_key))
-    numpy_seed = int(jnp.sum(numpy_seed_key))
+    key, seed_key, numpy_seed_key = jax.random.split(key, 3)
+    random_seed = int(jax.random.randint(seed_key, (), 0, 2**31 - 1).item())
+    numpy_seed = int(jax.random.randint(numpy_seed_key, (), 0, 2**31 - 1).item())
     rng = default_rng(numpy_seed)
 
     chromosome_lengths = [base_chr_length] * n_chr
-    num_haplotypes = num_simulated_individuals * ploidy
-    rate_map_positions = [0] + list(np.cumsum(chromosome_lengths))
-    rate_map_rates = [recombination_rate_per_chr] * len(chromosome_lengths)
-    rate_map = msprime.RateMap(position=rate_map_positions, rate=rate_map_rates)
+    cumulative = np.cumsum([0] + chromosome_lengths)
+    rate_map = msprime.RateMap(
+        position=cumulative,
+        rate=[recombination_rate_per_chr] * n_chr,
+    )
 
     ts = msprime.sim_ancestry(
-        samples=num_haplotypes,
+        samples=num_simulated_individuals * ploidy,
         population_size=effective_population_size,
         recombination_rate=rate_map,
-        random_seed=random_seed
+        random_seed=random_seed,
     )
-    mts = msprime.sim_mutations(ts, rate=mutation_rate, random_seed=random_seed)
+    mts = msprime.sim_mutations(ts, rate=mutation_rate, random_seed=random_seed + 1)
 
-    # --- Data Extraction (Unchanged) ---
     true_num_individuals = mts.num_samples // ploidy
     founder_indices = np.sort(rng.choice(true_num_individuals, n_ind, replace=False))
-    
-    all_variants = list(mts.variants())
-    genetic_map = np.full((n_chr, n_loci_per_chr), np.nan)
-    founder_haplotype_matrix = np.full((n_ind, n_chr, ploidy, n_loci_per_chr), np.nan)
 
-    for i in range(n_chr):
-        chr_start, chr_end = rate_map.left[i], rate_map.right[i]
-        chromosome_snps = [v for v in all_variants if chr_start <= v.site.position < chr_end and len(v.alleles) == 2]
+    geno = np.zeros((n_ind, n_chr, ploidy, n_loci_per_chr), dtype=np.uint8)
+    all_chr_positions_list = [] # Temporary list
+    chr_lengths_cm = []
+
+    all_variants = list(mts.variants())
+
+    for chr_idx in range(n_chr):
+        chr_left, chr_right = rate_map.left[chr_idx], rate_map.right[chr_idx]
+        chr_variants = [
+            var for var in all_variants
+            if chr_left <= var.site.position < chr_right and len(var.alleles) == 2
+        ]
+
+        if not chr_variants:
+            raise RuntimeError(f'No bi-allelic SNPs found on chromosome {chr_idx}. '
+                               'Consider increasing mutation_rate or base_chr_length.')
+
+        def maf_in_founders(var):
+            g = var.genotypes.reshape(true_num_individuals, ploidy)
+            founder_g = g[founder_indices]
+            
+            # [JAX-linear Fix]: Corrected MAF calculation.
+            # The .mean() of the 0/1 alleles already averages over all (n_ind * ploidy)
+            # alleles to give the allele frequency, p.
+            p = founder_g.mean()
+            # p = founder_g.mean() / ploidy # Original incorrect line
+            
+            return min(p, 1 - p)
 
         if enforce_founder_maf:
-            eligible_snps = [
-                var for var in chromosome_snps 
-                if min(np.mean(var.genotypes.reshape(true_num_individuals, ploidy)[founder_indices]), 
-                       1 - np.mean(var.genotypes.reshape(true_num_individuals, ploidy)[founder_indices])) > maf_threshold
-            ]
+            eligible = [var for var in chr_variants if maf_in_founders(var) >= maf_threshold]
         else:
-            eligible_snps = [var for var in chromosome_snps if min(np.mean(var.genotypes), 1 - np.mean(var.genotypes)) > maf_threshold]
+            # Still filter out monomorphic sites
+            eligible = [var for var in chr_variants if maf_in_founders(var) > 0]
 
-        num_found = len(eligible_snps)
-        num_to_select = min(num_found, n_loci_per_chr)
+        if len(eligible) < n_loci_per_chr:
+            raise RuntimeError(
+                f'Only {len(eligible)} SNPs passed the MAF filter on chromosome {chr_idx} '
+                f'(required {n_loci_per_chr}); '
+                'consider lowering maf_threshold or increasing the mutation rate.'
+            )
 
-        if num_to_select > 0:
-            selected_indices = rng.choice(len(eligible_snps), num_to_select, replace=False)
-            selected_snps = [eligible_snps[i] for i in selected_indices]
-            selected_snps.sort(key=lambda v: v.site.position)
+        selected_idx = rng.choice(len(eligible), n_loci_per_chr, replace=False)
+        selected = [eligible[i] for i in selected_idx]
+        selected.sort(key=lambda v: v.site.position)
 
-            for snp_idx, snp in enumerate(selected_snps):
-                all_genotypes = snp.genotypes.reshape(true_num_individuals, ploidy)
-                founder_genotypes = all_genotypes[founder_indices]
-                founder_haplotype_matrix[:, i, :, snp_idx] = founder_genotypes
-            
-            positions_cm = [(v.site.position - chr_start) * recombination_rate_per_chr * 100 for v in selected_snps]
-            genetic_map[i, :num_to_select] = positions_cm
+        chr_positions = []
+        for snp_pos, snp in enumerate(selected):
+            genotypes = snp.genotypes.reshape(true_num_individuals, ploidy)
+            founder_genotypes = genotypes[founder_indices]
+            geno[:, chr_idx, :, snp_pos] = founder_genotypes
 
-    # --- Padding and Final Population Assembly ---
-    n_pad = max_pop_size - n_ind
+            pos_cm = (snp.site.position - chr_left) * recombination_rate_per_chr * 100.0
+            chr_positions.append(pos_cm)
 
-    # Convert to JAX arrays before padding
-    founder_geno = jnp.array(founder_haplotype_matrix, dtype=jnp.uint8)
-    gen_map_jax = jnp.array(genetic_map)
+        # Append positions for this chromosome (as JAX array) to the temp list
+        all_chr_positions_list.append(jnp.array(chr_positions, dtype=jnp.float32))
+        chr_lengths_cm.append(chr_positions[-1] if chr_positions else 0.0)
 
-    # Pad core genotype/IBD arrays
-    padded_geno = jnp.pad(founder_geno, ((0, n_pad), (0, 0), (0, 0), (0, 0)), constant_values=0)
-    
-    # Create and pad IBD data
-    n_founder_alleles = n_ind * n_chr * ploidy * n_loci_per_chr
-    founder_ids_ibd = jnp.arange(n_founder_alleles, dtype=jnp.uint32)
-    founder_ibd = founder_ids_ibd.reshape(n_ind, n_chr, ploidy, n_loci_per_chr)
-    padded_ibd = jnp.pad(founder_ibd, ((0, n_pad), (0, 0), (0, 0), (0, 0)), constant_values=-1)
+    ibd = np.arange(n_ind * n_chr * ploidy * n_loci_per_chr, dtype=np.int32)
+    ibd = ibd.reshape(n_ind, n_chr, ploidy, n_loci_per_chr)
 
-    # Pad pedigree and identifier arrays
-    padded_id = jnp.pad(jnp.arange(n_ind), (0, n_pad), constant_values=-1)
-    padded_sex = jnp.pad(jax.random.choice(sex_key, jnp.array([0, 1], dtype=jnp.int8), (n_ind,)), (0, n_pad), constant_values=-1)
-    
-    # Create the is_active mask
-    is_active = jnp.arange(max_pop_size) < n_ind
+    meta = np.stack([
+        np.arange(n_ind, dtype=np.int32),
+        np.full(n_ind, -1, dtype=np.int32),
+        np.full(n_ind, -1, dtype=np.int32),
+        np.zeros(n_ind, dtype=np.int32),
+    ], axis=-1)
 
-    pop = Population(
-        geno=padded_geno,
-        ibd=padded_ibd,
-        id=padded_id,
-        iid=jnp.arange(max_pop_size, dtype=jnp.int32),
-        mother=jnp.full(max_pop_size, -1, dtype=jnp.int32),
-        father=jnp.full(max_pop_size, -1, dtype=jnp.int32),
-        sex=padded_sex,
-        gen=jnp.zeros(max_pop_size, dtype=jnp.int32),
-        is_active=is_active,
-        pheno=jnp.full((max_pop_size, 0), jnp.nan),
-        fixEff=jnp.zeros(max_pop_size, dtype=jnp.float32),
-        bv=jnp.full((max_pop_size, 0), jnp.nan),
+    population = Population(
+        geno=jnp.array(geno, dtype=jnp.uint8),
+        ibd=jnp.array(ibd, dtype=jnp.int32),
+        meta=jnp.array(meta, dtype=jnp.int32),
     )
 
-    return pop, gen_map_jax
+    chromosome_lengths_cm = jnp.array(chr_lengths_cm, dtype=jnp.float32)
 
+    # --- STACK the list of arrays into a single JAX array ---
+    # This creates the (n_chr, n_loci_per_chr) array required
+    # by the vmap in create_gamete.
+    stacked_locus_positions = jnp.stack(all_chr_positions_list) 
+
+    genetic_map = GeneticMap(
+        chromosome_lengths=chromosome_lengths_cm,
+        locus_positions=stacked_locus_positions, # Use the stacked array
+    )
+
+    return population, genetic_map
 
 # %% ../nbs/02_structs.ipynb 3
 import jax.numpy as jnp
