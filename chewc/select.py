@@ -68,6 +68,7 @@ def find_optimal_contributions(
     final_c = _solve_for_c_internal(final_lambda, g, A)
     return final_c
 
+
 def select_with_ocs(
     population: Population,
     breeding_values: jnp.ndarray,
@@ -96,3 +97,4 @@ def select_with_ocs(
     contributions /= jnp.sum(contributions)
 
     return candidates, contributions
+
